@@ -8,15 +8,35 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// ExtMandateURI identifies the agent-mesh "mandate required" A2A capabilities
+// extension. A greeter that advertises it requires callers to present a mandate.
+const ExtMandateURI = "https://agent-mesh.local/ext/mandate/v1"
+
+// Extension is an A2A capabilities extension: a URI naming the extension plus
+// optional parameters. The mandate-gated greeter uses one to tell callers they
+// must present a mandate and by which role to discover the issuing authority.
+type Extension struct {
+	URI         string         `json:"uri"`
+	Description string         `json:"description,omitempty"`
+	Required    bool           `json:"required,omitempty"`
+	Params      map[string]any `json:"params,omitempty"`
+}
+
+// Capabilities is the A2A capabilities object; only extensions are modeled here.
+type Capabilities struct {
+	Extensions []Extension `json:"extensions,omitempty"`
+}
+
 // Card is a minimal A2A Agent Card. Security is an OpenAPI-style list of scheme
 // requirement maps; an empty slice means "open" (no auth). URL is filled in
 // dynamically at serve time from the request host.
 type Card struct {
-	Name        string                `json:"name"`
-	Description string                `json:"description,omitempty"`
-	URL         string                `json:"url"`
-	Version     string                `json:"version"`
-	Security    []map[string][]string `json:"security"`
+	Name         string                `json:"name"`
+	Description  string                `json:"description,omitempty"`
+	URL          string                `json:"url"`
+	Version      string                `json:"version"`
+	Capabilities *Capabilities         `json:"capabilities,omitempty"`
+	Security     []map[string][]string `json:"security"`
 }
 
 // serveCard returns a handler that serves card, setting url to this host's /a2a
