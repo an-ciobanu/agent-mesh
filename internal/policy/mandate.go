@@ -11,6 +11,7 @@ import (
 
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
+	"github.com/an-ciobanu/agent-mesh/internal/events"
 )
 
 // Mandate is a GreetPolicy that admits a caller only if it presents a valid
@@ -48,17 +49,21 @@ func NewMandate(selfAns, authorityAns string, authorityPub ed25519.PublicKey, sc
 }
 
 // Authorize enforces the mandate. Every failure returns an error (fail closed).
-func (m *Mandate) Authorize(_ context.Context, req domain.GreetRequest) error {
+func (m *Mandate) Authorize(ctx context.Context, req domain.GreetRequest) error {
 	if len(req.Mandate) == 0 {
 		return fmt.Errorf("mandate required")
 	}
 	payload, signer, err := crypto.VerifyCOSE1(req.Mandate)
 	if err != nil {
+		events.Emit(ctx, "mandate.verify", events.StatusFail, map[string]string{"error": err.Error()})
 		return fmt.Errorf("mandate signature invalid: %w", err)
 	}
+	events.Emit(ctx, "mandate.verify", events.StatusOK, nil)
 	if !signer.Equal(m.authorityPub) {
+		events.Emit(ctx, "authority.pin", events.StatusFail, map[string]string{"authority": m.authorityAns})
 		return fmt.Errorf("mandate not signed by the trusted authority")
 	}
+	events.Emit(ctx, "authority.pin", events.StatusOK, map[string]string{"authority": m.authorityAns})
 	var claims domain.MandateClaims
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return fmt.Errorf("mandate claims malformed: %w", err)

@@ -1,7 +1,9 @@
 package policy
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +11,7 @@ import (
 
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
+	"github.com/an-ciobanu/agent-mesh/internal/events"
 	"github.com/an-ciobanu/agent-mesh/internal/nonce"
 )
 
@@ -99,6 +102,29 @@ func TestNonceFutureProof(t *testing.T) {
 	req := domain.GreetRequest{DPoPProof: proof, HTTPMethod: "POST", HTTPURL: testHTU}
 	if err := g.Authorize(context.Background(), req); err == nil {
 		t.Fatal("expected rejection for a proof with iat far in the future")
+	}
+}
+
+func TestNonceEmitsChecks(t *testing.T) {
+	g, store := nonceFixture(t)
+	priv, _ := crypto.GenerateDPoPKey()
+	n := store.Issue()
+	proof, err := crypto.CreateDPoPProof(priv, crypto.DPoPClaims{
+		HTM: "POST", HTU: testHTU, IAT: time.Now().Unix(), JTI: "j1", Nonce: n,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := domain.GreetRequest{CallerAns: domain.LocalANSName("visitor"), DPoPProof: proof, HTTPMethod: "POST", HTTPURL: testHTU}
+
+	var buf bytes.Buffer
+	ctx := events.WithScope(context.Background(), events.NewJSONEmitter(&buf), "g1", "ema", events.RoleResponder)
+	if err := g.Authorize(ctx, req); err != nil {
+		t.Fatalf("expected accept, got %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, `"step":"dpop.verify"`) || !strings.Contains(got, `"step":"nonce.consume"`) {
+		t.Fatalf("missing check events: %s", got)
 	}
 }
 

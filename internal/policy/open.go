@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
+	"github.com/an-ciobanu/agent-mesh/internal/events"
 )
 
 // Open accepts any greet from any caller that proved possession of a signing
@@ -17,7 +18,8 @@ type Open struct{}
 // ANS name (CallerAns) is self-asserted in P1: nothing here checks that the
 // signing key belongs to that name. Binding a name to a registered key is
 // deferred to P2/P3. An open greeter imposes no further requirement regardless.
-func (Open) Authorize(_ context.Context, _ domain.GreetRequest) error {
+func (Open) Authorize(ctx context.Context, _ domain.GreetRequest) error {
+	events.Emit(ctx, "gate", events.StatusOK, map[string]string{"policy": "open"})
 	return nil
 }
 

@@ -1,10 +1,12 @@
 package policy
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
+	"github.com/an-ciobanu/agent-mesh/internal/events"
 )
 
 func mustKey(t *testing.T) ed25519.PrivateKey {
@@ -65,6 +68,19 @@ func TestMandateHappyPath(t *testing.T) {
 	g, authPriv, claims := fixture(t)
 	if err := g.Authorize(context.Background(), req("visitor", signMandate(t, authPriv, claims))); err != nil {
 		t.Fatalf("valid mandate rejected: %v", err)
+	}
+}
+
+func TestMandateEmitsChecks(t *testing.T) {
+	g, authPriv, claims := fixture(t)
+	var buf bytes.Buffer
+	ctx := events.WithScope(context.Background(), events.NewJSONEmitter(&buf), "g1", "ema", events.RoleResponder)
+	if err := g.Authorize(ctx, req("visitor", signMandate(t, authPriv, claims))); err != nil {
+		t.Fatalf("expected accept, got %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, `"step":"mandate.verify"`) || !strings.Contains(got, `"step":"authority.pin"`) {
+		t.Fatalf("missing check events: %s", got)
 	}
 }
 

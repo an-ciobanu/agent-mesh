@@ -9,6 +9,7 @@ import (
 
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
+	"github.com/an-ciobanu/agent-mesh/internal/events"
 	"github.com/an-ciobanu/agent-mesh/internal/nonce"
 )
 
@@ -41,14 +42,16 @@ func NewNonce(selfAns string, store *nonce.Store, log zerolog.Logger) *Nonce {
 }
 
 // Authorize enforces the DPoP proof. Every failure returns an error (fail closed).
-func (n *Nonce) Authorize(_ context.Context, req domain.GreetRequest) error {
+func (n *Nonce) Authorize(ctx context.Context, req domain.GreetRequest) error {
 	if req.DPoPProof == "" {
 		return fmt.Errorf("DPoP proof required")
 	}
 	claims, thumb, err := crypto.VerifyDPoPProof(req.DPoPProof)
 	if err != nil {
+		events.Emit(ctx, "dpop.verify", events.StatusFail, map[string]string{"error": err.Error()})
 		return fmt.Errorf("DPoP proof invalid: %w", err)
 	}
+	events.Emit(ctx, "dpop.verify", events.StatusOK, map[string]string{"thumbprint": thumb})
 	if claims.HTM != req.HTTPMethod {
 		return fmt.Errorf("DPoP htm %q does not match request method %q", claims.HTM, req.HTTPMethod)
 	}
@@ -63,8 +66,10 @@ func (n *Nonce) Authorize(_ context.Context, req domain.GreetRequest) error {
 	// Consuming the nonce enforces single use and freshness (the greeter issued
 	// it, within the store's TTL).
 	if !n.store.Consume(claims.Nonce) {
+		events.Emit(ctx, "nonce.consume", events.StatusFail, nil)
 		return fmt.Errorf("DPoP nonce not recognized or already used")
 	}
+	events.Emit(ctx, "nonce.consume", events.StatusOK, nil)
 	n.log.Info().Str("callerAns", req.CallerAns).Str("dpopThumbprint", thumb).Msg("nonce proof accepted")
 	return nil
 }
