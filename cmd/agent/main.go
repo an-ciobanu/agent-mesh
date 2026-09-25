@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/an-ciobanu/agent-mesh/internal/audit"
+	"github.com/an-ciobanu/agent-mesh/internal/commerce/acp"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/a2a"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/authclient"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/discovery"
@@ -30,6 +31,7 @@ import (
 	"github.com/an-ciobanu/agent-mesh/internal/greet"
 	"github.com/an-ciobanu/agent-mesh/internal/nonce"
 	"github.com/an-ciobanu/agent-mesh/internal/policy"
+	"github.com/an-ciobanu/agent-mesh/internal/stripe"
 )
 
 func main() {
@@ -46,6 +48,10 @@ func main() {
 	nonceTTL := flag.Duration("nonce-ttl", 2*time.Minute, "nonce validity window (when --policy=nonce)")
 	emitEvents := flag.Bool("events", false, "emit per-step greet events as JSON lines to stdout")
 	allowTrigger := flag.Bool("allow-trigger", false, "expose POST /trigger/greet so a driver can make this agent initiate greets (demo only)")
+	acpSeller := flag.Bool("acp", false, "run as an ACP seller (serves /acp/* instead of a greet policy)")
+	acpCurrency := flag.String("acp-currency", "usd", "ACP catalog currency (when --acp)")
+	payment := flag.String("payment", "stripe", "ACP funding backend: stripe | fake (when --acp)")
+	stripeKeyEnv := flag.String("stripe-key-env", "STRIPE_SECRET_KEY", "env var holding the Stripe test secret key (when --acp --payment=stripe)")
 	flag.Parse()
 
 	log := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Str("agent", *name).Logger()
@@ -72,6 +78,16 @@ func main() {
 
 	disco := discovery.New(*registryURL)
 	ctx := context.Background()
+
+	if *acpSeller {
+		runACPSeller(ctx, acpSellerParams{
+			name: *name, role: *role, addr: *addr, baseURL: baseURL, selfAns: selfAns,
+			registryURL: *registryURL, currency: *acpCurrency, payment: *payment,
+			stripeKeyEnv: *stripeKeyEnv, authorityRole: *authorityRole, authorityName: *authorityName,
+			priv: priv, em: em, log: log, disco: disco,
+		})
+		return
+	}
 
 	var greetPolicy domain.GreetPolicy = policy.Open{}
 	card := a2a.Card{
@@ -166,6 +182,37 @@ func main() {
 		trig := a2a.NewTriggerService(*name, greetFn, log, em)
 		mux.HandleFunc("POST /trigger/greet", trig.HandleGreet)
 		log.Info().Msg("trigger endpoint enabled (POST /trigger/greet)")
+
+		buyFn := func(greetID, toName string) (string, string, error) {
+			gctx := events.WithScope(context.Background(), em, greetID, *name, events.RoleInitiator)
+			peers, serr := disco.Search(gctx, "seller")
+			if serr != nil {
+				return "", "", fmt.Errorf("discover sellers: %w", serr)
+			}
+			var peer domain.AgentInfo
+			found := false
+			for _, pr := range peers {
+				if pr.Name == toName {
+					peer, found = pr, true
+					break
+				}
+			}
+			if !found {
+				return "", "", fmt.Errorf("no seller named %q", toName)
+			}
+			card, cerr := res.FetchCard(gctx, peer.CardURL)
+			if cerr != nil {
+				return "", "", fmt.Errorf("read seller card: %w", cerr)
+			}
+			result, berr := acp.BuyPeer(gctx, http.DefaultClient, mcpCli, disco, selfAns, peer, card)
+			if berr != nil {
+				return "", "", berr
+			}
+			return result.PaymentRef, result.Status, nil
+		}
+		trig.SetBuy(buyFn)
+		mux.HandleFunc("POST /trigger/buy", trig.HandleBuy)
+		log.Info().Msg("buy endpoint enabled (POST /trigger/buy)")
 	}
 	srv := &http.Server{Addr: *addr, Handler: mux}
 	go func() {
@@ -241,6 +288,88 @@ func auditEvidence(ctx context.Context, tlURL string, evidence *domain.EvidenceB
 		"entryIndex": strconv.Itoa(evidence.Receipt.EntryIndex),
 		"treeSize":   strconv.Itoa(evidence.Receipt.TreeSize),
 	})
+}
+
+type acpSellerParams struct {
+	name, role, addr, baseURL, selfAns, registryURL string
+	currency, payment, stripeKeyEnv                 string
+	authorityRole, authorityName                    string
+	priv                                            ed25519.PrivateKey
+	em                                              events.Emitter
+	log                                             zerolog.Logger
+	disco                                           *discovery.Client
+}
+
+// runACPSeller runs the agent as an ACP seller: it resolves and pins the authority
+// that issues valid spend-mandates, builds a spend guard and a payment backend,
+// serves the ACP endpoints, and registers as its role. It blocks until signalled.
+func runACPSeller(ctx context.Context, p acpSellerParams) {
+	authPeer, authPub := resolveAuthority(ctx, p.disco, authclient.New(), p.authorityRole, p.authorityName, p.log)
+	authorityAns := domain.LocalANSName(authPeer.Name)
+	guard := policy.NewSpend(p.selfAns, authorityAns, authPub, p.log)
+
+	var pay acp.PaymentPrimitive
+	switch p.payment {
+	case "fake":
+		pay = acp.FakePayment{}
+		p.log.Info().Msg("ACP payment backend: fake (no network)")
+	case "stripe":
+		key := os.Getenv(p.stripeKeyEnv)
+		if key == "" {
+			p.log.Fatal().Str("env", p.stripeKeyEnv).Msg("ACP seller: Stripe secret key missing (fail closed)")
+		}
+		pay = acp.StripePaymentIntent{Client: stripe.NewClient(key)}
+		p.log.Info().Msg("ACP payment backend: stripe (test mode)")
+	default:
+		p.log.Fatal().Str("payment", p.payment).Msg("unknown --payment (want: stripe | fake)")
+	}
+
+	seller := acp.NewSeller(acp.SellerConfig{
+		SelfAns: p.selfAns, AgentName: p.name, Currency: p.currency,
+		Catalog: acp.DefaultCatalog(p.currency), Guard: guard, Payment: pay,
+		Events: p.em, Log: p.log,
+	})
+
+	card := a2a.Card{
+		Name: p.name, Version: "0.1.0", Security: []map[string][]string{},
+		Capabilities: &a2a.Capabilities{Extensions: []a2a.Extension{{
+			URI:         a2a.ExtACPURI,
+			Description: "buy over the Agentic Commerce Protocol; present a spend-mandate from the named authority",
+			Required:    true,
+			Params: map[string]any{
+				"catalogPath": "/acp/catalog", "checkoutPath": "/acp/checkout_sessions",
+				"authorityRole": p.authorityRole, "authorityAns": authorityAns, "currency": p.currency,
+			},
+		}}},
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/.well-known/agent-card.json", a2a.CardHandler(card, p.log))
+	seller.Mount(mux)
+
+	srv := &http.Server{Addr: p.addr, Handler: mux}
+	go func() {
+		p.log.Info().Str("addr", p.addr).Str("ans", p.selfAns).Msg("ACP seller listening")
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			p.log.Fatal().Err(err).Msg("acp seller server exited")
+		}
+	}()
+
+	info := domain.AgentInfo{Name: p.name, Role: p.role, BaseURL: p.baseURL, CardURL: p.baseURL + "/.well-known/agent-card.json"}
+	for i := 0; i < 10; i++ {
+		if err := p.disco.Register(ctx, info); err == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(shutdownCtx)
+	p.log.Info().Msg("acp seller stopped")
 }
 
 // resolveAuthority discovers the authority of the given role — optionally the one
