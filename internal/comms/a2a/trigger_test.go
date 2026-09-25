@@ -46,3 +46,29 @@ func TestTriggerGreetInvokesGreetFuncWithScope(t *testing.T) {
 		t.Fatalf("unexpected: %+v (gotGreetID=%s toName=%s)", out, gotGreetID, gotToName)
 	}
 }
+
+func TestHandleBuyRoutesToBuyFunc(t *testing.T) {
+	trig := NewTriggerService("Ada", func(string, string, string, string) (string, bool, error) {
+		return "", false, nil
+	}, zerolog.Nop(), events.Nop{})
+	trig.SetBuy(func(greetID, toName string) (string, string, error) {
+		if toName != "shop-acp" {
+			t.Fatalf("toName = %q", toName)
+		}
+		return "pi_fake_1", "succeeded", nil
+	})
+	srv := httptest.NewServer(http.HandlerFunc(trig.HandleBuy))
+	defer srv.Close()
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(`{"toName":"shop-acp"}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	var out struct {
+		GreetID, PaymentRef, Status, Error string
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if out.GreetID == "" || out.PaymentRef != "pi_fake_1" || out.Status != "succeeded" || out.Error != "" {
+		t.Fatalf("unexpected: %+v", out)
+	}
+}

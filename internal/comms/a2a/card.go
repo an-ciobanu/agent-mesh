@@ -17,6 +17,12 @@ const ExtMandateURI = "https://agent-mesh.local/ext/mandate/v1"
 // (via its get_nonce MCP tool) and present a DPoP proof-of-possession over it.
 const ExtNonceURI = "https://agent-mesh.local/ext/nonce/v1"
 
+// ExtACPURI identifies the agent-mesh "ACP seller" A2A capabilities extension. A
+// seller that advertises it sells over the Agentic Commerce Protocol: its params
+// carry the catalog/checkout paths, the authority that issues valid
+// spend-mandates, and the seller's currency.
+const ExtACPURI = "https://agent-mesh.local/ext/acp/v1"
+
 // Extension is an A2A capabilities extension: a URI naming the extension plus
 // optional parameters. The mandate-gated greeter uses one to tell callers they
 // must present a mandate and by which role to discover the issuing authority.

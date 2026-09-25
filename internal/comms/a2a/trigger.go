@@ -14,6 +14,11 @@ import (
 // accepted, and any error. The greet id is supplied so events correlate.
 type GreetFunc func(greetID, toRole, toName, text string) (reply string, accepted bool, err error)
 
+// BuyFunc makes this agent buy from a seller identified by name, using ACP. It
+// returns the payment reference, the funding status, and any error. The greet id
+// is supplied so events correlate across both agents.
+type BuyFunc func(greetID, toName string) (paymentRef, status string, err error)
+
 type triggerReq struct {
 	ToRole string `json:"toRole,omitempty"`
 	ToName string `json:"toName,omitempty"`
@@ -33,6 +38,7 @@ type triggerResp struct {
 type TriggerService struct {
 	self  string
 	greet GreetFunc
+	buy   BuyFunc
 	log   zerolog.Logger
 	em    events.Emitter
 }
@@ -66,6 +72,42 @@ func (t *TriggerService) HandleGreet(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		resp.Error = err.Error()
 		t.log.Warn().Err(err).Str("toName", req.ToName).Str("toRole", req.ToRole).Msg("trigger greet failed")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// SetBuy installs the ACP buy handler (mounted at POST /trigger/buy).
+func (t *TriggerService) SetBuy(fn BuyFunc) { t.buy = fn }
+
+type buyReq struct {
+	ToName string `json:"toName,omitempty"`
+}
+
+type buyResp struct {
+	GreetID    string `json:"greetId"`
+	PaymentRef string `json:"paymentRef,omitempty"`
+	Status     string `json:"status,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// HandleBuy handles POST /trigger/buy.
+func (t *TriggerService) HandleBuy(w http.ResponseWriter, r *http.Request) {
+	if t.buy == nil {
+		http.Error(w, "buy not enabled", http.StatusNotFound)
+		return
+	}
+	var req buyReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ToName == "" {
+		http.Error(w, "toName required", http.StatusBadRequest)
+		return
+	}
+	greetID := events.NewGreetID()
+	ref, status, err := t.buy(greetID, req.ToName)
+	resp := buyResp{GreetID: greetID, PaymentRef: ref, Status: status}
+	if err != nil {
+		resp.Error = err.Error()
+		t.log.Warn().Err(err).Str("toName", req.ToName).Msg("trigger buy failed")
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
