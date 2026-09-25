@@ -54,3 +54,17 @@ func TestRegisterRejectsMissingFields(t *testing.T) {
 		t.Fatalf("want 400 for missing name/baseURL, got %d", resp.StatusCode)
 	}
 }
+
+func TestRegisterRejectsMalformedJSON(t *testing.T) {
+	ts := httptest.NewServer(New(zerolog.Nop()).Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/register", "application/json", strings.NewReader(`{`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for malformed JSON, got %d", resp.StatusCode)
+	}
+}

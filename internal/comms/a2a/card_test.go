@@ -2,8 +2,10 @@ package a2a
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -37,5 +39,25 @@ func TestCardHandlerServesJSON(t *testing.T) {
 	}
 	if got.Security == nil {
 		t.Fatal("security must serialize as [], not null")
+	}
+}
+
+func TestCardHandlerNormalizesNilSecurity(t *testing.T) {
+	card := Card{Name: "x", Version: "0.1.0"} // Security left nil
+	ts := httptest.NewServer(CardHandler(card, zerolog.Nop()))
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/.well-known/agent-card.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"security":[]`) {
+		t.Fatalf("expected security to serialize as [], got: %s", body)
 	}
 }
