@@ -2,6 +2,7 @@ package greet
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -47,6 +48,38 @@ func TestInitiateGreetsDiscoveredOpenPeer(t *testing.T) {
 	}
 	if !strings.Contains(reply, caller) || !strings.Contains(reply, self) {
 		t.Fatalf("reply missing identities: %q", reply)
+	}
+}
+
+func TestInitiateErrorsWhenPeerRequiresAuth(t *testing.T) {
+	reg := httptest.NewServer(registry.New(zerolog.Nop()).Handler())
+	defer reg.Close()
+
+	// A peer whose card declares a non-empty security requirement — P1 has no
+	// way to satisfy that, so Initiate must refuse rather than greet blindly.
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"secure-greeter","url":"http://example.invalid/a2a","version":"0.1.0","security":[{"oauth2":[]}]}`))
+	}))
+	defer agent.Close()
+
+	disco := discovery.New(reg.URL)
+	ctx := context.Background()
+	if err := disco.Register(ctx, domain.AgentInfo{
+		Name: "secure-greeter", Role: "greeter", BaseURL: agent.URL,
+		CardURL: agent.URL + "/.well-known/agent-card.json",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	priv, _ := crypto.GenerateEd25519()
+	_, _, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(),
+		priv, domain.LocalANSName("visitor"), "greeter", "hi")
+	if err == nil {
+		t.Fatal("expected error when the peer requires authentication")
+	}
+	if !strings.Contains(err.Error(), "not supported in P1") {
+		t.Fatalf("error = %q, want it to mention P1 is not supported", err.Error())
 	}
 }
 
