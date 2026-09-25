@@ -39,7 +39,7 @@ func TestInitiateGreetsDiscoveredOpenPeer(t *testing.T) {
 
 	priv, _ := crypto.GenerateEd25519()
 	caller := domain.LocalANSName("visitor")
-	reply, peer, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(), priv, caller, "greeter", "hello there")
+	reply, _, peer, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(), priv, caller, "greeter", "hello there")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestInitiateErrorsWhenPeerRequiresAuth(t *testing.T) {
 	}
 
 	priv, _ := crypto.GenerateEd25519()
-	_, _, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(),
+	_, _, _, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(),
 		priv, domain.LocalANSName("visitor"), "greeter", "hi")
 	if err == nil {
 		t.Fatal("expected error when the peer requires authentication")
@@ -88,7 +88,7 @@ func TestInitiateErrorsWhenNoPeer(t *testing.T) {
 	defer reg.Close()
 
 	priv, _ := crypto.GenerateEd25519()
-	_, _, err := Initiate(context.Background(), discovery.New(reg.URL), resolver.New(), a2a.NewClient(),
+	_, _, _, err := Initiate(context.Background(), discovery.New(reg.URL), resolver.New(), a2a.NewClient(),
 		priv, domain.LocalANSName("visitor"), "greeter", "hi")
 	if err == nil {
 		t.Fatal("expected error when no agent of the role exists")

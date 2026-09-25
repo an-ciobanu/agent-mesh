@@ -13,8 +13,8 @@ import (
 )
 
 // Initiate finds a peer of role toRole, verifies it is open (declares no
-// security), and sends it an identity-signed greet, returning the reply and the
-// peer it greeted.
+// security), and sends it an identity-signed greet. It returns the reply, any
+// transparency evidence the peer sealed (nil if none), and the peer it greeted.
 func Initiate(
 	ctx context.Context,
 	disco domain.Discovery,
@@ -22,31 +22,31 @@ func Initiate(
 	cli *a2a.Client,
 	priv ed25519.PrivateKey,
 	callerAns, toRole, greeting string,
-) (string, domain.AgentInfo, error) {
+) (string, *domain.EvidenceBundle, domain.AgentInfo, error) {
 	peers, err := disco.Search(ctx, toRole)
 	if err != nil {
-		return "", domain.AgentInfo{}, fmt.Errorf("discover role %q: %w", toRole, err)
+		return "", nil, domain.AgentInfo{}, fmt.Errorf("discover role %q: %w", toRole, err)
 	}
 	if len(peers) == 0 {
-		return "", domain.AgentInfo{}, fmt.Errorf("no agents found for role %q", toRole)
+		return "", nil, domain.AgentInfo{}, fmt.Errorf("no agents found for role %q", toRole)
 	}
 	peer := peers[0]
 
 	card, err := res.FetchCard(ctx, peer.CardURL)
 	if err != nil {
-		return "", peer, fmt.Errorf("resolve peer card: %w", err)
+		return "", nil, peer, fmt.Errorf("resolve peer card: %w", err)
 	}
 	if len(card.Security) != 0 {
-		return "", peer, fmt.Errorf("peer %q requires authentication not supported in P1", peer.Name)
+		return "", nil, peer, fmt.Errorf("peer %q requires authentication not supported in P1", peer.Name)
 	}
 
-	reply, err := cli.SendGreet(ctx, card.URL, priv, a2a.GreetPayload{
+	reply, evidence, err := cli.SendGreet(ctx, card.URL, priv, a2a.GreetPayload{
 		CallerAns:   callerAns,
 		AudienceAns: domain.LocalANSName(peer.Name),
 		Greeting:    greeting,
 	})
 	if err != nil {
-		return "", peer, err
+		return "", nil, peer, err
 	}
-	return reply, peer, nil
+	return reply, evidence, peer, nil
 }

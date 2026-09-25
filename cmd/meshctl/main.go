@@ -10,6 +10,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/an-ciobanu/agent-mesh/internal/audit"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/a2a"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/discovery"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/resolver"
@@ -43,6 +44,8 @@ func runGreet(args []string) {
 	toRole := fs.String("to-role", "greeter", "role of the agent to greet")
 	text := fs.String("text", "hello", "greeting text")
 	keyDir := fs.String("keys", "", "identity key directory (default: ./data/<from>)")
+	tlURL := fs.String("transparency", "http://127.0.0.1:18091", "transparency log base URL (for --audit)")
+	doAudit := fs.Bool("audit", false, "independently audit the greeter's sealed evidence")
 	_ = fs.Parse(args)
 
 	log := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
@@ -56,9 +59,10 @@ func runGreet(args []string) {
 		log.Fatal().Err(err).Msg("load identity key")
 	}
 	callerAns := domain.LocalANSName(*from)
+	ctx := context.Background()
 
-	reply, peer, err := greet.Initiate(
-		context.Background(),
+	reply, evidence, peer, err := greet.Initiate(
+		ctx,
 		discovery.New(*registryURL),
 		resolver.New(),
 		a2a.NewClient(),
@@ -67,8 +71,32 @@ func runGreet(args []string) {
 	if err != nil {
 		log.Fatal().Err(err).Msg("greet failed")
 	}
-	log.Info().Str("peer", peer.Name).Str("callerAns", callerAns).Msg("greet sent")
 	fmt.Printf("greeted %s (%s)\nreply: %s\n", peer.Name, peer.BaseURL, reply)
+	if evidence != nil {
+		fmt.Printf("sealed: entry %d of %d\n", evidence.Receipt.EntryIndex, evidence.Receipt.TreeSize)
+	}
+
+	if *doAudit {
+		if evidence == nil {
+			log.Fatal().Msg("--audit requested but the greeter returned no evidence (run the agent with --transparency)")
+		}
+		tlPub, err := transparency.New(*tlURL).FetchPubKey(ctx)
+		if err != nil {
+			log.Fatal().Err(err).Msg("fetch transparency-log pubkey")
+		}
+		auditorPriv, err := crypto.GenerateEd25519()
+		if err != nil {
+			log.Fatal().Err(err).Msg("generate auditor key")
+		}
+		verdict, _, err := audit.New(domain.LocalANSName("auditor"), auditorPriv, log).Verify(ctx, *evidence, tlPub)
+		if err != nil {
+			log.Fatal().Err(err).Msg("audit")
+		}
+		fmt.Printf("audit verdict: %s\n", verdict.Verdict)
+		for _, c := range verdict.Checks {
+			fmt.Printf("  - %s\n", c)
+		}
+	}
 }
 
 func runTLCheck(args []string) {

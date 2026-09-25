@@ -40,7 +40,7 @@ func TestP1_SimpleGreetEndToEnd(t *testing.T) {
 
 	priv, _ := crypto.GenerateEd25519()
 	caller := domain.LocalANSName("visitor")
-	reply, peer, err := greet.Initiate(ctx, disco, resolver.New(), a2a.NewClient(), priv, caller, "greeter", "hello there")
+	reply, _, peer, err := greet.Initiate(ctx, disco, resolver.New(), a2a.NewClient(), priv, caller, "greeter", "hello there")
 	if err != nil {
 		t.Fatalf("greet: %v", err)
 	}
