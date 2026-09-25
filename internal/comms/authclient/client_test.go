@@ -39,3 +39,23 @@ func TestFetchPubKeyNon200(t *testing.T) {
 		t.Fatal("expected error on non-200 status")
 	}
 }
+
+func TestFetchPubKeyMalformedBody(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("{not json"))
+	}))
+	defer ts.Close()
+	if _, err := New().FetchPubKey(context.Background(), ts.URL); err == nil {
+		t.Fatal("expected error decoding a malformed body")
+	}
+}
+
+func TestFetchPubKeyInvalidJWK(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(crypto.JWK{Kty: "RSA", Crv: "Ed25519", X: "x"})
+	}))
+	defer ts.Close()
+	if _, err := New().FetchPubKey(context.Background(), ts.URL); err == nil {
+		t.Fatal("expected error for a non-Ed25519 JWK")
+	}
+}
