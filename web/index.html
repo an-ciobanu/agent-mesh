@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-mesh — live</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #131a24; --edge: #222c3a; --ink: #e6edf3; --muted: #8b93a7;
+    --simple: #f4523b;   /* simple greet  = red    */
+    --nonce:  #f2c94c;   /* nonce         = yellow */
+    --token:  #4aa3ff;   /* token/mandate = blue   */
+    --authority: #8b93a7;/* authority     = gray   */
+    --ok: #3fb950; --bad: #f85149; --wire: #56607a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  header { display: flex; align-items: baseline; gap: 14px; padding: 14px 20px;
+    border-bottom: 1px solid var(--edge); }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .5px; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .wrap { display: flex; gap: 16px; padding: 16px 20px; height: calc(100% - 54px); }
+  .stage { position: relative; flex: 1 1 auto; background: var(--panel);
+    border: 1px solid var(--edge); border-radius: 10px; overflow: hidden; min-width: 0; }
+  canvas { display: block; width: 100%; height: 100%; }
+  .legend { position: absolute; left: 12px; bottom: 12px; display: flex; gap: 14px;
+    flex-wrap: wrap; background: rgba(13,17,23,.7); border: 1px solid var(--edge);
+    border-radius: 8px; padding: 8px 12px; font-size: 12px; backdrop-filter: blur(3px); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .hint { position: absolute; right: 12px; top: 12px; color: var(--muted); font-size: 12px;
+    background: rgba(13,17,23,.6); border: 1px solid var(--edge); border-radius: 6px; padding: 5px 9px; }
+  aside { flex: 0 0 380px; display: flex; flex-direction: column; background: var(--panel);
+    border: 1px solid var(--edge); border-radius: 10px; overflow: hidden; }
+  aside .head { padding: 10px 14px; border-bottom: 1px solid var(--edge); font-size: 12px;
+    color: var(--muted); text-transform: uppercase; letter-spacing: 1px; display: flex; justify-content: space-between; }
+  #log { flex: 1 1 auto; overflow-y: auto; padding: 8px 12px; font-size: 12.5px; }
+  .ev { padding: 7px 10px; margin-bottom: 7px; border-radius: 7px; border: 1px solid var(--edge); background: #0f1620; cursor: pointer; transition: border-color .12s, background .12s; }
+  .ev:hover { border-color: #4aa3ff; background: #111b28; }
+  .ev.active { border-color: #4aa3ff; box-shadow: 0 0 0 1px #4aa3ff44; }
+  .ev .inspect { color: var(--muted); font-size: 10.5px; margin-top: 4px; opacity: 0; transition: opacity .12s; }
+  .ev:hover .inspect { opacity: 1; }
+  .ev .top { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+  .ev .who { font-weight: 600; }
+  .ev .t { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .ev .step { color: var(--muted); margin-top: 3px; }
+  .ev.ok { border-left: 3px solid var(--ok); }
+  .ev.bad { border-left: 3px solid var(--bad); }
+  .ev.pending { border-left: 3px solid var(--wire); }
+  .tag { font-size: 10.5px; padding: 1px 7px; border-radius: 20px; border: 1px solid currentColor; }
+  .badge-ok { color: var(--ok); } .badge-bad { color: var(--bad); }
+  .reply { color: var(--ink); margin-top: 3px; }
+  .seal { color: #6ea8fe; margin-top: 2px; font-size: 11.5px; }
+  .controls { margin-left: auto; display: flex; gap: 20px; align-items: center; }
+  .ctrl { display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--muted); }
+  .ctrl label { white-space: nowrap; }
+  .ctrl output { color: var(--ink); font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; }
+  .ctrl input[type=range] { width: 130px; accent-color: #4aa3ff; cursor: pointer; }
+  #pauseBtn { font: inherit; font-size: 12px; color: var(--ink); background: #1b2430;
+    border: 1px solid var(--edge); border-radius: 6px; padding: 5px 12px; cursor: pointer; min-width: 78px; }
+  #pauseBtn:hover { border-color: #4aa3ff; }
+  #pauseBtn.paused { color: var(--nonce); border-color: var(--nonce); }
+
+  /* --- detail drawer (sequence diagram) --- */
+  #drawer { position: fixed; left: 0; right: 0; bottom: 0; height: 46%; z-index: 30;
+    background: #0f151d; border-top: 1px solid var(--edge); box-shadow: 0 -12px 30px rgba(0,0,0,.5);
+    transform: translateY(100%); transition: transform .22s ease; display: flex; flex-direction: column; }
+  #drawer.open { transform: translateY(0); }
+  #drawer .dhead { display: flex; align-items: center; gap: 12px; padding: 10px 18px;
+    border-bottom: 1px solid var(--edge); }
+  #drawer .dhead .title { font-weight: 600; font-size: 14px; }
+  #drawer .dhead .verdict { font-size: 11px; padding: 2px 9px; border-radius: 20px; border: 1px solid currentColor; }
+  #drawer .dhead .dt { color: var(--muted); font-size: 12px; }
+  #drawer .dclose { margin-left: auto; background: #1b2430; border: 1px solid var(--edge); color: var(--ink);
+    border-radius: 6px; width: 30px; height: 30px; cursor: pointer; font-size: 15px; }
+  #drawer .dclose:hover { border-color: #4aa3ff; }
+  #dbody { flex: 1 1 auto; overflow-y: auto; padding: 8px 18px 18px; }
+  .seq { position: relative; }
+  .lanehead { display: grid; gap: 0; position: sticky; top: 0; background: #0f151d; padding: 8px 0 10px; z-index: 2; }
+  .lanehead .ln { text-align: center; font-size: 12.5px; font-weight: 600; }
+  .lanehead .ln small { display: block; font-weight: 400; font-size: 10px; color: var(--muted); }
+  .lifelines { position: absolute; left: 0; right: 0; z-index: 0; }
+  .lifeline { position: absolute; top: 0; bottom: 0; width: 2px; background: #253040; transform: translateX(-50%); }
+  .rows { position: relative; z-index: 1; }
+  .srow { position: relative; height: 46px; cursor: pointer; }
+  .srow:hover .msgline, .srow:hover .chk { filter: brightness(1.35); }
+  .msg { position: absolute; top: 20px; display: flex; align-items: center; }
+  .msg .msgline { flex: 1 1 auto; height: 0; border-top: 2px solid var(--wire); position: relative; }
+  .msg.res .msgline { border-top-style: dashed; }
+  .msg .lbl { position: absolute; left: 50%; top: -16px; transform: translateX(-50%); white-space: nowrap;
+    font-size: 11px; color: var(--ink); background: #0f151d; padding: 0 6px; }
+  .msg .head { font-size: 12px; line-height: 1; color: var(--wire); }
+  .chk { position: absolute; top: 12px; transform: translateX(-50%); font-size: 11px;
+    background: #14202c; border: 1px solid var(--edge); border-radius: 6px; padding: 4px 9px; white-space: nowrap; }
+  .chk.ok { border-color: #2b5c39; } .chk.ok b { color: var(--ok); }
+  .chk.bad { border-color: #6b2b2b; color: #ffd7d3; } .chk.bad b { color: var(--bad); }
+  .msg.ok .msgline { border-top-color: var(--ok); } .msg.ok .head { color: var(--ok); }
+  .msg.bad .msgline { border-top-color: var(--bad); } .msg.bad .head { color: var(--bad); }
+  .raw { grid-column: 1 / -1; margin: 0 0 8px; background: #0b1119; border: 1px solid var(--edge);
+    border-radius: 7px; padding: 8px 12px; font-size: 11.5px; }
+  .raw div { display: flex; gap: 10px; padding: 1px 0; }
+  .raw .k { color: var(--muted); min-width: 130px; } .raw .v { color: var(--ink); word-break: break-all; }
+  .reason { color: #ffd7d3; background: #2a1414; border: 1px solid #6b2b2b; border-radius: 7px;
+    padding: 8px 12px; margin-top: 10px; font-size: 12.5px; }
+  .hintrow { color: var(--muted); font-size: 11px; margin: 2px 0 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>agent-mesh</h1>
+  <span class="sub">agents collide → a real greet fires → discovery · gate (simple / nonce / token) · sealed receipt</span>
+  <div class="controls">
+    <div class="ctrl">
+      <label for="speedRange">speed</label>
+      <input id="speedRange" type="range" min="0.2" max="3" step="0.1" value="1">
+      <output id="speedOut">1.0×</output>
+    </div>
+    <button id="pauseBtn" type="button">⏸ Pause</button>
+  </div>
+</header>
+<div class="wrap">
+  <div class="stage">
+    <canvas id="c"></canvas>
+    <div class="hint">agents drift &amp; bounce · a collision triggers a greet</div>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--simple)"></i>simple greet</span>
+      <span><i class="dot" style="background:var(--nonce)"></i>nonce</span>
+      <span><i class="dot" style="background:var(--token)"></i>token (mandate)</span>
+      <span><i class="dot" style="background:var(--authority)"></i>authority</span>
+    </div>
+  </div>
+  <aside>
+    <div class="head"><span>interaction stream</span><span id="count">0 greets</span></div>
+    <div id="log"></div>
+  </aside>
+</div>
+<div id="drawer">
+  <div class="dhead">
+    <span class="title" id="dTitle"></span>
+    <span class="verdict" id="dVerdict"></span>
+    <span class="dt" id="dTime"></span>
+    <button class="dclose" id="dClose" title="close (Esc)">×</button>
+  </div>
+  <div id="dbody"></div>
+</div>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const logEl = document.getElementById('log'), countEl = document.getElementById('count');
+const COL = { simple:'#f4523b', nonce:'#f2c94c', token:'#4aa3ff', authority:'#8b93a7' };
+const LABEL = { simple:'simple', nonce:'nonce', token:'token', authority:'authority' };
+let W, H, DPR;
+function resize(){ DPR = window.devicePixelRatio||1; W = cv.clientWidth; H = cv.clientHeight;
+  cv.width = W*DPR; cv.height = H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); }
+new ResizeObserver(resize).observe(cv); resize();
+
+// Circles are the real launched agents. The roster (and therefore the count) is a
+// launch-time property of the mesh; the browser just draws what the server reports.
+let agents = [];
+async function loadAgents(){
+  const res = await fetch('/agents');
+  const roster = await res.json(); // [{name, role, policy, type, color}]
+  agents = roster.map(a => ({
+    name: a.name, type: a.type, color: a.color, policy: a.policy,
+    r: a.type === 'authority' ? 24 : 27,
+    x: 80 + Math.random()*(Math.max(1,W-160)),
+    y: 80 + Math.random()*(Math.max(1,H-160)),
+    flash: 0,
+  }));
+  for (const a of agents){ const s=0.6+Math.random()*0.5, ang=Math.random()*Math.PI*2; a.vx=Math.cos(ang)*s; a.vy=Math.sin(ang)*s; }
+}
+
+let SPEED = 1;                                         // velocity multiplier from the speed slider
+let paused = false;                                    // freeze physics so the log can be inspected
+const links = []; const cooldown = new Map(); let greets = 0;
+const now = () => new Date().toLocaleTimeString([], {hour12:false});
+const pairKey = (i,j)=> i<j? i+'-'+j : j+'-'+i;
+
+// greetId -> {greetId, from, to, type, events, verdict, reason}
+const interactions = {};
+const logRows = {};                                    // greetId -> log row element
+let drawerGreetID = null;                              // greetId of the open drawer, or null
+
+// --- live wiring: server roster + SSE stream + real /collide ---
+function startEvents(){
+  const es = new EventSource('/events');
+  es.onmessage = (m) => {
+    let e; try { e = JSON.parse(m.data); } catch { return; }
+    const it = interactions[e.greetId] || (interactions[e.greetId] = {greetId:e.greetId, from:'', to:'', type:'', events:[], verdict:'', reason:''});
+    it.events.push(e);
+    if (e.role === 'initiator' && !it.from) it.from = e.agent;
+    if (e.role === 'responder' && !it.to)   it.to = e.agent;
+    if (e.step === 'requirement' && e.detail && e.detail.type) it.type = e.detail.type;
+    if (e.step === 'greet.reply')    it.verdict = 'accepted';
+    if (e.step === 'greet.rejected'){ it.verdict = 'rejected'; it.reason = (e.detail && e.detail.error) || it.reason; }
+    if (e.step === 'gate' && e.status === 'fail' && !it.reason) it.reason = e.detail && e.detail.reason;
+    updateLogEntry(it);
+    drawLinkFor(it);
+    if (drawerGreetID === e.greetId) renderDrawerFor(it);
+  };
+  es.onerror = () => { /* EventSource auto-reconnects */ };
+}
+
+async function collide(iniName, tgtName){
+  try {
+    const res = await fetch('/collide', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ From: iniName, To: tgtName }),
+    });
+    const out = await res.json();
+    if (out.error) return;                     // e.g. authority target, or transient
+    if (!interactions[out.greetId]) interactions[out.greetId] = { greetId: out.greetId, from: out.from, to: out.to, type: out.type, events: [], verdict: '', reason: '' };
+    addLogEntry(out.greetId);                   // create the stream row now; SSE fills it
+    drawLinkFor(interactions[out.greetId]);
+  } catch (e) { /* ignore transient */ }
+}
+
+// --- interaction stream (log rows) ---
+function badgeFor(v){
+  if (v === 'accepted') return '<span class="tag badge-ok">accepted</span>';
+  if (v === 'rejected') return '<span class="tag badge-bad">rejected</span>';
+  return '<span class="tag" style="color:var(--muted)">pending</span>';
+}
+function addLogEntry(greetId){
+  if (logRows[greetId]) return logRows[greetId];
+  const it = interactions[greetId] || (interactions[greetId] = {greetId, from:'', to:'', type:'', events:[], verdict:'', reason:''});
+  greets++; countEl.textContent = greets + (greets===1?' greet':' greets');
+  const el = document.createElement('div'); el.className = 'ev pending';
+  logRows[greetId] = el;
+  el.addEventListener('click', ()=> openDrawer(greetId));
+  logEl.appendChild(el);
+  updateLogEntry(it);
+  logEl.scrollTop = logEl.scrollHeight;
+  return el;
+}
+function updateLogEntry(it){
+  const el = logRows[it.greetId]; if (!el) return;
+  const v = it.verdict;
+  el.className = 'ev ' + (v==='accepted'?'ok':v==='rejected'?'bad':'pending');
+  const typeTag = it.type ? `<span class="tag" style="color:${COL[it.type]||'#8b93a7'}">${LABEL[it.type]||it.type}</span>` : '';
+  let html = `<div class="top"><span class="who">${it.from||'?'} → ${it.to||'?'} ${typeTag}</span>${badgeFor(v)}</div>`;
+  const step = v==='accepted' ? 'identity JWS ✓ · gate ✓'
+             : v==='rejected' ? ('gate rejected'+(it.reason?' — '+it.reason:''))
+             : 'discovering '+(it.to||'greeter')+' · reading agent card…';
+  html += `<div class="step">${step}</div>`;
+  if (v==='accepted'){
+    html += `<div class="reply">reply: hi ${it.from}, this is ${it.to}</div>`;
+    const sealEv = it.events.find(e=>e.step==='seal');
+    const entry = sealEv && sealEv.detail && sealEv.detail.entryIndex!=null ? sealEv.detail.entryIndex : null;
+    if (entry!=null) html += `<div class="seal">sealed ✓  receipt entry #${entry}  ·  audit: valid</div>`;
+  }
+  html += `<div class="inspect">click to inspect ↗</div>`;
+  el.innerHTML = html;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// --- build the drawer's sequence-diagram model from the real agent events ---
+function colorType(name){ const a = agents.find(x=>x.name===name); return a ? a.type : 'simple'; }
+function modelFromEvents(it){
+  const isToken = it.type === 'mandate' || it.type === 'token';
+  const authEv = it.events.find(e => e.step==='mandate.acquire');
+  const authName = (authEv && authEv.detail && authEv.detail.authority) || 'authority';
+  const lanes = isToken
+    ? [{name:it.from,role:colorType(it.from),sub:'initiator'},{name:authName,role:'authority',sub:'authority'},{name:it.to,role:colorType(it.to),sub:'greeter · token'}]
+    : [{name:it.from,role:colorType(it.from),sub:'initiator'},{name:it.to,role:colorType(it.to),sub:'greeter'}];
+  const R = isToken ? 2 : 1;
+  const steps = [];
+  for (const e of it.events){
+    const raw = e.detail || {};
+    switch (e.step){
+      case 'card.read':      steps.push({t:'msg', from:0, to:R, label:'GET agent-card', head:'►', raw}); break;
+      case 'mandate.acquire':
+        steps.push({t:'msg', from:0, to:1, label:'POST /mcp issue_mandate', head:'►', raw});
+        if (e.status==='ok') steps.push({t:'msg', from:1, to:0, cls:'res', label:'COSE token', head:'◄', raw});
+        break;
+      case 'nonce.get':      steps.push({t:'msg', from:0, to:R, label:'MCP get_nonce → nonce', head:'►', raw}); break;
+      case 'dpop.build':     steps.push({t:'chk', lane:0, status:e.status, label:'build DPoP proof', raw}); break;
+      case 'greet.send':     steps.push({t:'msg', from:0, to:R, label:'POST /a2a greet + JWS', head:'►', raw}); break;
+      case 'jws.verify':     steps.push({t:'chk', lane:R, status:e.status, label:'verify identity JWS', raw}); break;
+      case 'mandate.verify': steps.push({t:'chk', lane:R, status:e.status, label:'verify COSE mandate', raw}); break;
+      case 'authority.pin':  steps.push({t:'chk', lane:R, status:e.status, label:'pin authority key', raw}); break;
+      case 'dpop.verify':    steps.push({t:'chk', lane:R, status:e.status, label:'verify DPoP proof', raw}); break;
+      case 'nonce.consume':  steps.push({t:'chk', lane:R, status:e.status, label:'consume nonce (single-use)', raw}); break;
+      case 'gate':           steps.push({t:'chk', lane:R, status:e.status, label:'gate', raw}); break;
+      case 'seal':           steps.push({t:'chk', lane:R, status:e.status, label:'seal → receipt #'+(raw.entryIndex!=null?raw.entryIndex:'?'), raw}); break;
+      case 'audit':          steps.push({t:'chk', lane:0, status:e.status, label:'audit vs TL: '+(raw.verdict||raw.note||''), raw}); break;
+      case 'greet.reply':    steps.push({t:'msg', from:R, to:0, cls:'ok', label:'200 · reply', head:'◄', raw}); break;
+    }
+  }
+  const deduped = steps.filter((s,i)=> i===0 || !(s.t===steps[i-1].t && s.label===steps[i-1].label && s.status===steps[i-1].status && s.lane===steps[i-1].lane));
+  return { from:it.from, to:it.to, type:it.type, time:new Date().toLocaleTimeString([],{hour12:false}),
+           accepted: it.verdict==='accepted', reason: it.reason, lanes, steps: deduped };
+}
+
+// --- detail drawer rendering ---
+const drawer = document.getElementById('drawer'), dbody = document.getElementById('dbody');
+const dTitle = document.getElementById('dTitle'), dVerdict = document.getElementById('dVerdict'), dTime = document.getElementById('dTime');
+const laneCenter = (i,n) => ((i+0.5)/n*100);
+
+function rawHTML(raw){
+  return '<div class="raw">'+Object.entries(raw).map(([k,v])=>`<div><span class="k">${k}</span><span class="v">${v}</span></div>`).join('')+'</div>';
+}
+
+function setActiveRow(greetId){
+  for (const id in logRows) logRows[id].classList.remove('active');
+  const el = logRows[greetId]; if (el) el.classList.add('active');
+}
+
+// Render one sequence-diagram model into the drawer body. Data comes from
+// modelFromEvents(); the lane/row/arrow/expandable-raw markup is unchanged.
+function renderDrawer(d){
+  const n = d.lanes.length;
+  dTitle.innerHTML = `${d.from} → ${d.to} <span style="color:${COL[d.type]||'var(--muted)'}">· ${LABEL[d.type]||d.type||''}</span>`;
+  dVerdict.textContent = d.accepted ? 'ACCEPTED' : 'REJECTED';
+  dVerdict.style.color = d.accepted ? 'var(--ok)' : 'var(--bad)';
+  dTime.textContent = d.time;
+
+  const cols = `grid-template-columns:repeat(${n},1fr)`;
+  let html = `<div class="hintrow">real HTTP + MCP calls between the agents · click any step to reveal the artifact behind it</div>`;
+  html += `<div class="seq">`;
+  html += `<div class="lanehead" style="${cols}">`+ d.lanes.map(l=>`<div class="ln" style="color:${COL[l.role]||'var(--muted)'}">${l.name}<small>${l.sub}</small></div>`).join('') +`</div>`;
+  html += `<div class="lifelines" id="llWrap">`+ d.lanes.map((_,i)=>`<div class="lifeline" style="left:${laneCenter(i,n)}%"></div>`).join('') +`</div>`;
+  html += `<div class="rows">`;
+  d.steps.forEach((s,si)=>{
+    if (s.t==='msg'){
+      const lo=Math.min(s.from,s.to), hi=Math.max(s.from,s.to);
+      const left=laneCenter(lo,n), right=laneCenter(hi,n), width=right-left;
+      const fwd = s.to>s.from;
+      html += `<div class="srow" data-si="${si}">
+        <div class="msg ${s.cls||''}" style="left:${left}%;width:${width}%">
+          <span class="head">${fwd?'':'◄'}</span>
+          <div class="msgline"><span class="lbl">${s.label}</span></div>
+          <span class="head">${fwd?'►':''}</span>
+        </div></div>`;
+    } else { // check annotation on one lane
+      const left=laneCenter(s.lane,n);
+      const mark = s.status==='ok'?'<b>✓</b>':'<b>✗</b>';
+      html += `<div class="srow" data-si="${si}">
+        <div class="chk ${s.status==='ok'?'ok':'bad'}" style="left:${left}%">${s.label} ${mark}</div></div>`;
+    }
+  });
+  html += `</div></div>`;
+  if (!d.accepted && d.reason) html += `<div class="reason">✗ fail closed — ${d.reason}</div>`;
+  dbody.innerHTML = html;
+
+  // size lifelines to the rows block; wire expand
+  const rowsEl = dbody.querySelector('.rows'), llWrap = dbody.querySelector('#llWrap');
+  const fitLifelines = ()=>{ if (llWrap && rowsEl){ llWrap.style.top = rowsEl.offsetTop+'px'; llWrap.style.height = rowsEl.offsetHeight+'px'; } };
+  fitLifelines();
+  dbody.querySelectorAll('.srow').forEach(row=>{
+    row.addEventListener('click', ()=>{
+      const s = d.steps[+row.dataset.si];
+      const existing = row.nextElementSibling;
+      if (existing && existing.classList.contains('rawwrap')){ existing.remove(); fitLifelines(); return; }
+      if (!s.raw) return;
+      const w = document.createElement('div'); w.className='rawwrap'; w.innerHTML = rawHTML(s.raw);
+      row.after(w); fitLifelines();
+    });
+  });
+}
+
+function openDrawer(greetId){
+  const it = interactions[greetId]; if (!it) return;
+  drawerGreetID = greetId;
+  setActiveRow(greetId);
+  renderDrawer(modelFromEvents(it));
+  drawer.classList.add('open');
+}
+function renderDrawerFor(it){
+  if (drawerGreetID === it.greetId) renderDrawer(modelFromEvents(it));
+}
+function closeDrawer(){
+  drawer.classList.remove('open');
+  if (drawerGreetID!=null){ const el=logRows[drawerGreetID]; if (el) el.classList.remove('active'); drawerGreetID=null; }
+}
+document.getElementById('dClose').addEventListener('click', closeDrawer);
+window.addEventListener('keydown', e=>{ if (e.key==='Escape' && drawer.classList.contains('open')) closeDrawer(); });
+
+// Draw / refresh the canvas link for one interaction (pending gray, accepted
+// green, rejected red), keyed by greetId and looked up by circle name.
+function drawLinkFor(it){
+  const state = it.verdict==='accepted' ? 'ok' : it.verdict==='rejected' ? 'bad' : 'pending';
+  let L = links.find(l => l.greetId === it.greetId);
+  if (!L){ L = {greetId: it.greetId, from: it.from, to: it.to, state, life: 1}; links.push(L); }
+  else { L.state = state; if (it.from) L.from = it.from; if (it.to) L.to = it.to; L.life = 1; }
+}
+
+function step(){
+  ctx.clearRect(0,0,W,H);
+  for (let i=links.length-1;i>=0;i--){ const L=links[i], a=agents.find(x=>x.name===L.from), b=agents.find(x=>x.name===L.to);
+    if (!paused) L.life -= 0.006; if (L.life<=0){ links.splice(i,1); continue; }
+    if (!a || !b) continue;
+    ctx.globalAlpha = Math.max(0,L.life);
+    ctx.strokeStyle = L.state==='ok'?'#3fb950':L.state==='bad'?'#f85149':'#56607a';
+    ctx.lineWidth = L.state==='pending'?1.5:2.5;
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke(); ctx.globalAlpha=1;
+  }
+  if (!paused){
+    for (const a of agents){ a.x+=a.vx*SPEED; a.y+=a.vy*SPEED;
+      if (a.x<a.r){a.x=a.r;a.vx*=-1;} if (a.x>W-a.r){a.x=W-a.r;a.vx*=-1;}
+      if (a.y<a.r){a.y=a.r;a.vy*=-1;} if (a.y>H-a.r){a.y=H-a.r;a.vy*=-1;}
+      if (a.flash>0) a.flash-=0.04;
+    }
+    for (let i=0;i<agents.length;i++) for (let j=i+1;j<agents.length;j++){
+      const a=agents[i], b=agents[j], dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy);
+      if (d < a.r+b.r){
+        const nx=dx/(d||1), ny=dy/(d||1), ov=(a.r+b.r-d)/2;
+        a.x-=nx*ov; a.y-=ny*ov; b.x+=nx*ov; b.y+=ny*ov;
+        a.vx=-Math.abs(a.vx)*Math.sign(dx||1); b.vx=Math.abs(b.vx)*Math.sign(dx||1); [a.vy,b.vy]=[b.vy,a.vy];
+        const k=pairKey(i,j), t=performance.now();
+        if (!cooldown.get(k) || t-cooldown.get(k) > 2500){ cooldown.set(k,t);
+          let ini=i, tgt=j; if (agents[tgt].type==='authority'){ ini=j; tgt=i; }
+          if (agents[tgt].type!=='authority'){ agents[ini].flash=1; agents[tgt].flash=1; collide(agents[ini].name, agents[tgt].name); }
+        }
+      }
+    }
+  }
+  for (const a of agents){
+    if (a.flash>0){ ctx.beginPath(); ctx.arc(a.x,a.y,a.r+6*a.flash,0,7); ctx.fillStyle=a.color+'22'; ctx.fill(); }
+    ctx.beginPath(); ctx.arc(a.x,a.y,a.r,0,7);
+    ctx.fillStyle = a.type==='authority' ? '#1b2430' : a.color+'2e'; ctx.fill();
+    ctx.lineWidth=2.5; ctx.strokeStyle=a.color; ctx.stroke();
+    ctx.fillStyle='#ffffff'; ctx.font='600 12px ui-monospace, monospace'; ctx.textAlign='center';
+    ctx.fillText(a.name, a.x, a.y+3);
+    ctx.fillStyle=a.color; ctx.font='9px ui-monospace, monospace';
+    ctx.fillText(LABEL[a.type]||a.type, a.x, a.y+a.r+12);
+  }
+  requestAnimationFrame(step);
+}
+
+// --- controls (speed slider + pause) ---
+const speedRange = document.getElementById('speedRange'), speedOut = document.getElementById('speedOut');
+speedRange.addEventListener('input', ()=>{ SPEED = +speedRange.value; speedOut.textContent = SPEED.toFixed(1)+'×'; });
+
+const pauseBtn = document.getElementById('pauseBtn');
+function setPaused(p){ paused = p; pauseBtn.textContent = p ? '▶ Resume' : '⏸ Pause'; pauseBtn.classList.toggle('paused', p); }
+pauseBtn.addEventListener('click', ()=> setPaused(!paused));
+window.addEventListener('keydown', e=>{ if (e.code==='Space' && e.target.tagName!=='INPUT'){ e.preventDefault(); setPaused(!paused); } });
+
+// --- boot: load the real roster, subscribe to the event stream, then animate ---
+(async function boot(){
+  await loadAgents();
+  startEvents();
+  requestAnimationFrame(step);
+})();
+</script>
+</body>
+</html>
