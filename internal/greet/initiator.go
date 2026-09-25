@@ -79,13 +79,13 @@ func GreetPeer(
 		if disco == nil {
 			return "", nil, fmt.Errorf("peer %q requires a mandate but no discovery is available", peer.Name)
 		}
-		mandate, merr := acquireMandate(ctx, disco, mcpCli, ext, callerAns, audienceAns)
+		mandate, authName, merr := acquireMandate(ctx, disco, mcpCli, ext, callerAns, audienceAns)
 		if merr != nil {
-			events.Emit(ctx, "mandate.acquire", events.StatusFail, map[string]string{"error": merr.Error()})
+			events.Emit(ctx, "mandate.acquire", events.StatusFail, map[string]string{"error": merr.Error(), "authority": authName})
 			return "", nil, merr
 		}
 		events.Emit(ctx, "mandate.acquire", events.StatusOK, map[string]string{
-			"authority": stringParam(ext.Params, "authorityRole", "authority"),
+			"authority": authName,
 			"scope":     stringParam(ext.Params, "scope", "greet"),
 			"audience":  audienceAns,
 			"tool":      "issue_mandate (MCP)",
@@ -133,20 +133,43 @@ func mandateExtension(card a2a.Card) (a2a.Extension, bool) {
 	return a2a.Extension{}, false
 }
 
+// selectAuthority picks the authority a caller must use from those discovered by
+// role. When authorityAns is set (the card named a specific authority), it
+// returns the peer whose ANS matches — fail closed if none does. When it is
+// empty (single-authority / back-compat), it returns the first peer.
+func selectAuthority(peers []domain.AgentInfo, authorityAns string) (domain.AgentInfo, bool) {
+	if len(peers) == 0 {
+		return domain.AgentInfo{}, false
+	}
+	if authorityAns == "" {
+		return peers[0], true
+	}
+	for _, p := range peers {
+		if domain.LocalANSName(p.Name) == authorityAns {
+			return p, true
+		}
+	}
+	return domain.AgentInfo{}, false
+}
+
 // acquireMandate discovers the authority named by the extension and obtains a
 // mandate for callerAns->audienceAns via the authority's issue_mandate MCP tool.
-func acquireMandate(ctx context.Context, disco domain.Discovery, mcpCli *mcp.Client, ext a2a.Extension, callerAns, audienceAns string) ([]byte, error) {
+// It returns the chosen authority's name alongside the mandate so callers can
+// report which authority was actually used.
+func acquireMandate(ctx context.Context, disco domain.Discovery, mcpCli *mcp.Client, ext a2a.Extension, callerAns, audienceAns string) ([]byte, string, error) {
 	authorityRole := stringParam(ext.Params, "authorityRole", "authority")
+	authorityAns := stringParam(ext.Params, "authorityAns", "")
 	scope := stringParam(ext.Params, "scope", "greet")
 
 	authorities, err := disco.Search(ctx, authorityRole)
 	if err != nil {
-		return nil, fmt.Errorf("discover authority role %q: %w", authorityRole, err)
+		return nil, "", fmt.Errorf("discover authority role %q: %w", authorityRole, err)
 	}
-	if len(authorities) == 0 {
-		return nil, fmt.Errorf("no authority found for role %q", authorityRole)
+	authority, ok := selectAuthority(authorities, authorityAns)
+	if !ok {
+		return nil, "", fmt.Errorf("no authority %q found under role %q", authorityAns, authorityRole)
 	}
-	authURL := authorities[0].BaseURL + "/mcp"
+	authURL := authority.BaseURL + "/mcp"
 
 	raw, err := mcpCli.Call(ctx, authURL, "issue_mandate", map[string]string{
 		"subjectAns":  callerAns,
@@ -154,18 +177,18 @@ func acquireMandate(ctx context.Context, disco domain.Discovery, mcpCli *mcp.Cli
 		"scope":       scope,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("issue_mandate: %w", err)
+		return nil, authority.Name, fmt.Errorf("issue_mandate: %w", err)
 	}
 	var out struct {
 		MandateCOSE []byte `json:"mandateCose"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("parse issue_mandate result: %w", err)
+		return nil, authority.Name, fmt.Errorf("parse issue_mandate result: %w", err)
 	}
 	if len(out.MandateCOSE) == 0 {
-		return nil, fmt.Errorf("authority returned an empty mandate")
+		return nil, authority.Name, fmt.Errorf("authority returned an empty mandate")
 	}
-	return out.MandateCOSE, nil
+	return out.MandateCOSE, authority.Name, nil
 }
 
 // nonceExtension returns the DPoP-nonce extension if the card advertises it.
