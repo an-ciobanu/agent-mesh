@@ -11,11 +11,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
 
+	"github.com/an-ciobanu/agent-mesh/internal/audit"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/a2a"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/authclient"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/discovery"
@@ -153,10 +155,11 @@ func main() {
 					return "", false, fmt.Errorf("no agent named %q in role %q", toName, toRole)
 				}
 			}
-			reply, _, err := greet.GreetPeer(gctx, res, a2aCli, mcpCli, disco, priv, selfAns, peer, text)
+			reply, evidence, err := greet.GreetPeer(gctx, res, a2aCli, mcpCli, disco, priv, selfAns, peer, text)
 			if err != nil {
 				return "", false, err
 			}
+			auditEvidence(gctx, *transparencyURL, evidence, log)
 			return reply, true, nil
 		}
 		trig := a2a.NewTriggerService(*name, greetFn, log, em)
@@ -198,6 +201,45 @@ func main() {
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
 	log.Info().Msg("agent stopped")
+}
+
+// auditEvidence independently verifies the greeter's sealed evidence against the
+// transparency log and emits an `audit` event so the UI can show the TL capstone
+// (real inclusion proof), not just a claim. Best-effort: any failure emits a
+// fail-status audit event and returns.
+func auditEvidence(ctx context.Context, tlURL string, evidence *domain.EvidenceBundle, log zerolog.Logger) {
+	if evidence == nil {
+		events.Emit(ctx, "audit", events.StatusInfo, map[string]string{"note": "no evidence (greeter not sealing)"})
+		return
+	}
+	if tlURL == "" {
+		events.Emit(ctx, "audit", events.StatusInfo, map[string]string{
+			"entryIndex": strconv.Itoa(evidence.Receipt.EntryIndex),
+			"treeSize":   strconv.Itoa(evidence.Receipt.TreeSize),
+			"note":       "sealed; no --transparency to audit",
+		})
+		return
+	}
+	tlPub, err := transparency.New(tlURL).FetchPubKey(ctx)
+	if err != nil {
+		events.Emit(ctx, "audit", events.StatusFail, map[string]string{"error": "fetch TL pubkey: " + err.Error()})
+		return
+	}
+	auditorPriv, err := crypto.GenerateEd25519()
+	if err != nil {
+		events.Emit(ctx, "audit", events.StatusFail, map[string]string{"error": "gen auditor key: " + err.Error()})
+		return
+	}
+	verdict, _, err := audit.New(domain.LocalANSName("auditor"), auditorPriv, log).Verify(ctx, *evidence, tlPub)
+	if err != nil {
+		events.Emit(ctx, "audit", events.StatusFail, map[string]string{"error": err.Error()})
+		return
+	}
+	events.Emit(ctx, "audit", events.StatusOK, map[string]string{
+		"verdict":    verdict.Verdict,
+		"entryIndex": strconv.Itoa(evidence.Receipt.EntryIndex),
+		"treeSize":   strconv.Itoa(evidence.Receipt.TreeSize),
+	})
 }
 
 // resolveAuthority discovers the authority of the given role and pins its public
