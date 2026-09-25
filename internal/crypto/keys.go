@@ -64,6 +64,22 @@ func PublicJWK(pub ed25519.PublicKey) JWK {
 	}
 }
 
+// PublicKeyFromJWK converts an Ed25519 OKP JWK to a public key. It is the
+// inverse of PublicJWK.
+func PublicKeyFromJWK(j JWK) (ed25519.PublicKey, error) {
+	if j.Kty != "OKP" || j.Crv != "Ed25519" {
+		return nil, fmt.Errorf("jwk: not an Ed25519 OKP key")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(j.X)
+	if err != nil {
+		return nil, fmt.Errorf("jwk: decode x: %w", err)
+	}
+	if len(raw) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("jwk: bad key size %d", len(raw))
+	}
+	return ed25519.PublicKey(raw), nil
+}
+
 // Thumbprint returns the RFC 7638 JWK thumbprint (base64url SHA-256 over the
 // canonical JSON of the required members, in lexicographic order).
 func Thumbprint(j JWK) string {
