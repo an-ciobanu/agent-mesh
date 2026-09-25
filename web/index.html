@@ -134,6 +134,11 @@
       <input id="speedRange" type="range" min="0.2" max="3" step="0.1" value="1">
       <output id="speedOut">1.0×</output>
     </div>
+    <div class="ctrl">
+      <label for="agentRange">agents</label>
+      <input id="agentRange" type="range" min="0" max="8" step="1" value="0">
+      <output id="agentOut">0</output>
+    </div>
     <button id="pauseBtn" type="button">⏸ Pause</button>
   </div>
 </header>
@@ -439,6 +444,41 @@ const pauseBtn = document.getElementById('pauseBtn');
 function setPaused(p){ paused = p; pauseBtn.textContent = p ? '▶ Resume' : '⏸ Pause'; pauseBtn.classList.toggle('paused', p); }
 pauseBtn.addEventListener('click', ()=> setPaused(!paused));
 window.addEventListener('keydown', e=>{ if (e.code==='Space' && e.target.tagName!=='INPUT'){ e.preventDefault(); setPaused(!paused); } });
+
+// --- controls (agents slider: spawns/despawns real agents at runtime) ---
+const agentRange = document.getElementById('agentRange'), agentOut = document.getElementById('agentOut');
+let extra = 0;             // how many dynamic agents currently live
+let reconciling = false;
+
+function addCircle(a){
+  // Mirrors loadAgents(): same fields (name,type,color,policy,r,x,y,vx,vy,flash),
+  // same radius rule, same random spawn position and speed/angle velocity.
+  const s = 0.6+Math.random()*0.5, ang = Math.random()*Math.PI*2;
+  agents.push({ name:a.name, type:a.type, color:a.color, policy:a.policy,
+    r: a.type==='authority'?24:27,
+    x: 80+Math.random()*(Math.max(1,W-160)), y: 80+Math.random()*(Math.max(1,H-160)),
+    vx: Math.cos(ang)*s, vy: Math.sin(ang)*s, flash:0 });
+}
+function removeCircleByName(name){
+  const i = agents.findIndex(x=>x.name===name); if (i>=0) agents.splice(i,1);
+}
+async function reconcileAgents(){
+  if (reconciling) return;
+  reconciling = true; agentRange.disabled = true;
+  try {
+    while (extra < +agentRange.value){
+      const res = await fetch('/spawn', {method:'POST'});
+      if (!res.ok) { agentRange.value = extra; break; }
+      const a = await res.json(); addCircle(a); extra++; agentOut.textContent = extra;
+    }
+    while (extra > +agentRange.value){
+      const res = await fetch('/despawn', {method:'POST'});
+      if (!res.ok) { agentRange.value = extra; break; }
+      const out = await res.json(); removeCircleByName(out.removed); extra--; agentOut.textContent = extra;
+    }
+  } finally { reconciling = false; agentRange.disabled = false; }
+}
+agentRange.addEventListener('change', reconcileAgents); // fires on release, not each drag tick
 
 // --- boot: load the real roster, subscribe to the event stream, then animate ---
 (async function boot(){
