@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -72,7 +71,8 @@ func TestNoMandateHeaderMeansNilMandate(t *testing.T) {
 }
 
 func TestBadMandateEncodingFailsClosed(t *testing.T) {
-	svc := NewGreetService(domain.LocalANSName("greeter"), &capturePolicy{}, zerolog.Nop())
+	pol := &capturePolicy{}
+	svc := NewGreetService(domain.LocalANSName("greeter"), pol, zerolog.Nop())
 	ts := httptest.NewServer(http.HandlerFunc(svc.HandleMessageSend))
 	defer ts.Close()
 
@@ -82,10 +82,12 @@ func TestBadMandateEncodingFailsClosed(t *testing.T) {
 		CallerAns:   domain.LocalANSName("visitor"),
 		AudienceAns: domain.LocalANSName("greeter"),
 		Greeting:    "hi",
-	}, func(r *http.Request) { r.Header.Set(HeaderMandate, "!!!not base64!!!") })
+	}, func(h http.Header) { h.Set(HeaderMandate, "!!!not base64!!!") })
 	if err == nil {
 		t.Fatal("expected the greet to be rejected for an invalid mandate encoding")
 	}
+	// The reject must happen before the policy runs (fail closed).
+	if pol.last.CallerAns != "" || pol.last.Mandate != nil {
+		t.Fatal("policy should not have been invoked on a bad mandate encoding")
+	}
 }
-
-var _ = base64.StdEncoding

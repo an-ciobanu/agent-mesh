@@ -14,14 +14,14 @@ import (
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
 )
 
-// SendOption customizes an outbound greet request before it is sent.
-type SendOption func(*http.Request)
+// SendOption customizes an outbound greet request's headers before it is sent.
+type SendOption func(http.Header)
 
 // WithMandate attaches a mandate (COSE_Sign1 bytes) to the greet via the
 // X-ANS-Mandate header, base64-std encoded.
 func WithMandate(mandate []byte) SendOption {
-	return func(r *http.Request) {
-		r.Header.Set(HeaderMandate, base64.StdEncoding.EncodeToString(mandate))
+	return func(h http.Header) {
+		h.Set(HeaderMandate, base64.StdEncoding.EncodeToString(mandate))
 	}
 }
 
@@ -65,7 +65,7 @@ func (c *Client) SendGreet(ctx context.Context, endpoint string, priv ed25519.Pr
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(HeaderRequestJWS, jws)
 	for _, opt := range opts {
-		opt(req)
+		opt(req.Header)
 	}
 
 	resp, err := c.http.Do(req)
