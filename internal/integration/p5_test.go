@@ -43,7 +43,8 @@ func TestP5OrchestratorCollideEndToEnd(t *testing.T) {
 	}
 	defer sup.Stop()
 
-	greetID, err := orchestrator.NewDriver(roster).Collide(ctx, "Noah", "Ada")
+	book := orchestrator.NewAgentBook(roster, 19300)
+	greetID, err := orchestrator.NewDriver(book).Collide(ctx, "Noah", "Ada")
 	if err != nil {
 		t.Fatalf("collide: %v", err)
 	}

@@ -30,8 +30,9 @@ func main() {
 	log := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Str("component", "orchestrator").Logger()
 
 	roster := orchestrator.DefaultRoster()
+	book := orchestrator.NewAgentBook(roster, 18300)
 	hub := orchestrator.NewHub(log)
-	driver := orchestrator.NewDriver(roster)
+	driver := orchestrator.NewDriver(book)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -46,7 +47,7 @@ func main() {
 	mux.Handle("GET /", http.FileServer(http.Dir(*webDir)))
 	mux.HandleFunc("GET /agents", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(roster.Agents)
+		_ = json.NewEncoder(w).Encode(book.List())
 	})
 	mux.HandleFunc("GET /events", hub.ServeSSE)
 	mux.HandleFunc("POST /collide", func(w http.ResponseWriter, r *http.Request) {
@@ -67,6 +68,35 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"greetId": greetID, "from": from.Name, "to": to.Name, "type": to.Type,
 		})
+	})
+	mux.HandleFunc("POST /spawn", func(w http.ResponseWriter, r *http.Request) {
+		a, ok := book.NextAgent()
+		w.Header().Set("Content-Type", "application/json")
+		if !ok {
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "no more agents available"})
+			return
+		}
+		if err := sup.SpawnOne(a); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		book.Add(a)
+		log.Info().Str("agent", a.Name).Str("policy", a.Policy).Msg("spawned dynamic agent")
+		_ = json.NewEncoder(w).Encode(a)
+	})
+	mux.HandleFunc("POST /despawn", func(w http.ResponseWriter, r *http.Request) {
+		a, ok := book.RemoveLast()
+		w.Header().Set("Content-Type", "application/json")
+		if !ok {
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "no dynamic agents to remove"})
+			return
+		}
+		sup.Kill(a.Name)
+		log.Info().Str("agent", a.Name).Msg("despawned dynamic agent")
+		_ = json.NewEncoder(w).Encode(map[string]string{"removed": a.Name})
 	})
 
 	srv := &http.Server{Addr: *uiAddr, Handler: mux}

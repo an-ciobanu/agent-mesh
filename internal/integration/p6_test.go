@@ -45,7 +45,8 @@ func TestP6MandateFollowsNamedAuthority(t *testing.T) {
 	}
 	defer sup.Stop()
 
-	greetID, err := orchestrator.NewDriver(roster).Collide(ctx, "Ada", "Kai")
+	book := orchestrator.NewAgentBook(roster, 19300)
+	greetID, err := orchestrator.NewDriver(book).Collide(ctx, "Ada", "Kai")
 	if err != nil {
 		t.Fatalf("collide: %v", err)
 	}
