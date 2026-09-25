@@ -25,6 +25,14 @@ func WithMandate(mandate []byte) SendOption {
 	}
 }
 
+// WithDPoP attaches an RFC 9449 DPoP proof (a compact JWS) to the greet via the
+// X-ANS-DPoP header.
+func WithDPoP(proof string) SendOption {
+	return func(h http.Header) {
+		h.Set(HeaderDPoP, proof)
+	}
+}
+
 // Client sends A2A greets to peer agents.
 type Client struct {
 	http *http.Client

@@ -22,6 +22,9 @@ const (
 	// domain.MandateClaims), base64-std encoded. Optional; a mandate-gated
 	// policy requires it.
 	HeaderMandate = "X-ANS-Mandate"
+	// HeaderDPoP carries the caller's RFC 9449 DPoP proof (an ES256 compact JWS)
+	// verbatim. Optional; a nonce-gated policy requires it.
+	HeaderDPoP = "X-ANS-DPoP"
 )
 
 // GreetPayload is the signed body of a greet: who, to whom, and what.
@@ -163,6 +166,9 @@ func (g *GreetService) HandleMessageSend(w http.ResponseWriter, r *http.Request)
 		Greeting:            gp.Greeting,
 		CallerKeyThumbprint: thumb,
 		Mandate:             mandate,
+		DPoPProof:           r.Header.Get(HeaderDPoP),
+		HTTPMethod:          r.Method,
+		HTTPURL:             "http://" + r.Host + r.URL.Path,
 	}); err != nil {
 		g.log.Warn().Err(err).Str("callerAns", gp.CallerAns).Msg("greet: policy rejected")
 		g.writeError(w, req.ID, -32003, "greet not authorized: "+err.Error())

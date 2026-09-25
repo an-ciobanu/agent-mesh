@@ -12,6 +12,11 @@ import (
 // extension. A greeter that advertises it requires callers to present a mandate.
 const ExtMandateURI = "https://agent-mesh.local/ext/mandate/v1"
 
+// ExtNonceURI identifies the agent-mesh "DPoP nonce required" A2A capabilities
+// extension. A greeter that advertises it requires callers to obtain a nonce
+// (via its get_nonce MCP tool) and present a DPoP proof-of-possession over it.
+const ExtNonceURI = "https://agent-mesh.local/ext/nonce/v1"
+
 // Extension is an A2A capabilities extension: a URI naming the extension plus
 // optional parameters. The mandate-gated greeter uses one to tell callers they
 // must present a mandate and by which role to discover the issuing authority.
