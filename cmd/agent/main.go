@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,9 +20,12 @@ import (
 	"github.com/an-ciobanu/agent-mesh/internal/comms/authclient"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/discovery"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/mcp"
+	"github.com/an-ciobanu/agent-mesh/internal/comms/resolver"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/transparency"
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
+	"github.com/an-ciobanu/agent-mesh/internal/events"
+	"github.com/an-ciobanu/agent-mesh/internal/greet"
 	"github.com/an-ciobanu/agent-mesh/internal/nonce"
 	"github.com/an-ciobanu/agent-mesh/internal/policy"
 )
@@ -37,6 +41,8 @@ func main() {
 	authorityRole := flag.String("authority-role", "authority", "role of the mandate authority (when --policy=mandate)")
 	scope := flag.String("scope", "greet", "required mandate scope (when --policy=mandate)")
 	nonceTTL := flag.Duration("nonce-ttl", 2*time.Minute, "nonce validity window (when --policy=nonce)")
+	emitEvents := flag.Bool("events", false, "emit per-step greet events as JSON lines to stdout")
+	allowTrigger := flag.Bool("allow-trigger", false, "expose POST /trigger/greet so a driver can make this agent initiate greets (demo only)")
 	flag.Parse()
 
 	log := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Str("agent", *name).Logger()
@@ -51,6 +57,11 @@ func main() {
 	priv, err := crypto.LoadOrCreateEd25519(filepath.Join(dir, "id_ed25519.seed"))
 	if err != nil {
 		log.Fatal().Err(err).Msg("load identity key")
+	}
+
+	var em events.Emitter = events.Nop{}
+	if *emitEvents {
+		em = events.NewJSONEmitter(os.Stdout)
 	}
 
 	baseURL := "http://" + *addr
@@ -107,10 +118,50 @@ func main() {
 		opts = append(opts, a2a.WithSealing(priv, transparency.New(*transparencyURL)))
 		log.Info().Str("transparency", *transparencyURL).Msg("greet sealing enabled")
 	}
+	opts = append(opts, a2a.WithEvents(em, *name, *role))
 	greetSvc := a2a.NewGreetService(selfAns, greetPolicy, log, opts...)
 	mux := a2a.NewMux(card, greetSvc, log)
 	if mcpHandler != nil {
 		mux.Handle("/mcp", mcpHandler)
+	}
+	if *allowTrigger {
+		res := resolver.New()
+		a2aCli := a2a.NewClient()
+		mcpCli := mcp.NewClient()
+		greetFn := func(greetID, toRole, toName, text string) (string, bool, error) {
+			if toRole == "" {
+				return "", false, fmt.Errorf("toRole is required")
+			}
+			gctx := events.WithScope(context.Background(), em, greetID, *name, events.RoleInitiator)
+			peers, serr := disco.Search(gctx, toRole)
+			if serr != nil {
+				return "", false, fmt.Errorf("discover role %q: %w", toRole, serr)
+			}
+			if len(peers) == 0 {
+				return "", false, fmt.Errorf("no agents found for role %q", toRole)
+			}
+			peer := peers[0]
+			if toName != "" {
+				found := false
+				for _, p := range peers {
+					if p.Name == toName {
+						peer, found = p, true
+						break
+					}
+				}
+				if !found {
+					return "", false, fmt.Errorf("no agent named %q in role %q", toName, toRole)
+				}
+			}
+			reply, _, err := greet.GreetPeer(gctx, res, a2aCli, mcpCli, disco, priv, selfAns, peer, text)
+			if err != nil {
+				return "", false, err
+			}
+			return reply, true, nil
+		}
+		trig := a2a.NewTriggerService(*name, greetFn, log, em)
+		mux.HandleFunc("POST /trigger/greet", trig.HandleGreet)
+		log.Info().Msg("trigger endpoint enabled (POST /trigger/greet)")
 	}
 	srv := &http.Server{Addr: *addr, Handler: mux}
 	go func() {
