@@ -44,7 +44,9 @@ type receiptClaims struct {
 }
 
 func (s *Service) handleAppend(w http.ResponseWriter, r *http.Request) {
-	statement, err := io.ReadAll(io.LimitReader(r.Body, maxStatementBytes))
+	// Read one byte past the limit so an oversized body can be detected and
+	// rejected, rather than silently truncated and sealed.
+	statement, err := io.ReadAll(io.LimitReader(r.Body, maxStatementBytes+1))
 	if err != nil {
 		s.l.Warn().Err(err).Msg("append: read body")
 		http.Error(w, "unreadable statement", http.StatusBadRequest)
@@ -52,6 +54,11 @@ func (s *Service) handleAppend(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(statement) == 0 {
 		http.Error(w, "empty statement", http.StatusBadRequest)
+		return
+	}
+	if len(statement) > maxStatementBytes {
+		s.l.Warn().Int("bytes", len(statement)).Msg("append: statement exceeds max size")
+		http.Error(w, "statement exceeds maximum size", http.StatusRequestEntityTooLarge)
 		return
 	}
 
