@@ -155,3 +155,28 @@ func TestMandateMalformedClaims(t *testing.T) {
 		t.Fatal("expected rejection for malformed claims")
 	}
 }
+
+func TestMandateMalformedNotBefore(t *testing.T) {
+	g, authPriv, claims := fixture(t)
+	claims.NotBefore = "not-a-timestamp"
+	if err := g.Authorize(context.Background(), req("visitor", signMandate(t, authPriv, claims))); err == nil {
+		t.Fatal("expected rejection for malformed notBefore")
+	}
+}
+
+func TestMandateMalformedNotAfter(t *testing.T) {
+	g, authPriv, claims := fixture(t)
+	claims.NotAfter = "not-a-timestamp"
+	if err := g.Authorize(context.Background(), req("visitor", signMandate(t, authPriv, claims))); err == nil {
+		t.Fatal("expected rejection for malformed notAfter")
+	}
+}
+
+func TestMandateUsesInjectedClock(t *testing.T) {
+	g, authPriv, claims := fixture(t)
+	// Freeze the clock far in the future so the fixture's 1h window is expired.
+	g.now = func() time.Time { return time.Now().UTC().Add(48 * time.Hour) }
+	if err := g.Authorize(context.Background(), req("visitor", signMandate(t, authPriv, claims))); err == nil {
+		t.Fatal("expected expiry using the injected clock")
+	}
+}
