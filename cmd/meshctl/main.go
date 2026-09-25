@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/an-ciobanu/agent-mesh/internal/audit"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/a2a"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/discovery"
+	"github.com/an-ciobanu/agent-mesh/internal/comms/mcp"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/resolver"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/transparency"
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
@@ -23,7 +25,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: meshctl <command> [flags]")
-		fmt.Fprintln(os.Stderr, "commands: greet, tl-check")
+		fmt.Fprintln(os.Stderr, "commands: greet, tl-check, mandate-check")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -31,6 +33,8 @@ func main() {
 		runGreet(os.Args[2:])
 	case "tl-check":
 		runTLCheck(os.Args[2:])
+	case "mandate-check":
+		runMandateCheck(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n", os.Args[1])
 		os.Exit(2)
@@ -140,4 +144,54 @@ func runTLCheck(args []string) {
 	}
 
 	fmt.Printf("sealed entry %d of %d; receipt TL-signed and inclusion proof verified OK\n", rec.EntryIndex, rec.TreeSize)
+}
+
+func runMandateCheck(args []string) {
+	fs := flag.NewFlagSet("mandate-check", flag.ExitOnError)
+	registryURL := fs.String("registry", "http://127.0.0.1:18090", "registry base URL")
+	subject := fs.String("subject", "visitor", "subject name")
+	audience := fs.String("audience", "greeter-mandate", "audience name")
+	scope := fs.String("scope", "greet", "requested scope")
+	_ = fs.Parse(args)
+
+	log := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
+	ctx := context.Background()
+
+	peers, err := discovery.New(*registryURL).Search(ctx, "authority")
+	if err != nil {
+		log.Fatal().Err(err).Msg("discover authority")
+	}
+	if len(peers) == 0 {
+		log.Fatal().Msg("no authority registered")
+	}
+	authURL := peers[0].BaseURL + "/mcp"
+
+	raw, err := mcp.NewClient().Call(ctx, authURL, "issue_mandate", map[string]string{
+		"subjectAns":  domain.LocalANSName(*subject),
+		"audienceAns": domain.LocalANSName(*audience),
+		"scope":       *scope,
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("issue_mandate")
+	}
+	var res struct {
+		MandateCOSE []byte `json:"mandateCose"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		log.Fatal().Err(err).Msg("parse issue_mandate result")
+	}
+
+	payload, authPub, err := crypto.VerifyCOSE1(res.MandateCOSE)
+	if err != nil {
+		log.Fatal().Err(err).Msg("verify mandate")
+	}
+	var claims domain.MandateClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		log.Fatal().Err(err).Msg("parse mandate claims")
+	}
+
+	fmt.Printf("mandate %s: subject=%s audience=%s scope=%s (valid %s..%s)\n",
+		claims.MandateID, claims.SubjectAns, claims.AudienceAns, claims.Scope, claims.NotBefore, claims.NotAfter)
+	fmt.Printf("signed by authority %s (key %s)\n", claims.AuthorityAns, crypto.Thumbprint(crypto.PublicJWK(authPub)))
+	fmt.Println("mandate issued and verified OK")
 }
