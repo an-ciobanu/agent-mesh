@@ -63,7 +63,7 @@
   #pauseBtn.paused { color: var(--nonce); border-color: var(--nonce); }
 
   /* --- detail drawer (sequence diagram) --- */
-  #drawer { position: fixed; left: 0; right: 0; bottom: 0; height: 46%; z-index: 30;
+  #drawer { position: fixed; left: 0; right: 0; bottom: 0; height: 64%; z-index: 30;
     background: #0f151d; border-top: 1px solid var(--edge); box-shadow: 0 -12px 30px rgba(0,0,0,.5);
     transform: translateY(100%); transition: transform .22s ease; display: flex; flex-direction: column; }
   #drawer.open { transform: translateY(0); }
@@ -83,7 +83,7 @@
   .lifelines { position: absolute; left: 0; right: 0; z-index: 0; }
   .lifeline { position: absolute; top: 0; bottom: 0; width: 2px; background: #253040; transform: translateX(-50%); }
   .rows { position: relative; z-index: 1; }
-  .srow { position: relative; height: 46px; cursor: pointer; }
+  .srow { position: relative; height: 36px; cursor: pointer; }
   .srow:hover .msgline, .srow:hover .chk { filter: brightness(1.35); }
   .msg { position: absolute; top: 20px; display: flex; align-items: center; }
   .msg .msgline { flex: 1 1 auto; height: 0; border-top: 2px solid var(--wire); position: relative; }
