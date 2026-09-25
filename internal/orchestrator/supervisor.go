@@ -1,0 +1,162 @@
+package orchestrator
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os/exec"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
+
+	"github.com/an-ciobanu/agent-mesh/internal/events"
+)
+
+// Supervisor spawns and supervises the demo mesh's child processes.
+type Supervisor struct {
+	bin          string // directory holding the built binaries (e.g. "bin")
+	registry     string // host:port
+	transparency string
+	roster       Roster
+	hub          *Hub
+	log          zerolog.Logger
+
+	mu   sync.Mutex
+	cmds []*exec.Cmd
+}
+
+// NewSupervisor builds a supervisor. binDir holds the compiled binaries.
+func NewSupervisor(binDir, registryAddr, transparencyAddr string, roster Roster, hub *Hub, log zerolog.Logger) *Supervisor {
+	return &Supervisor{
+		bin: binDir, registry: registryAddr, transparency: transparencyAddr,
+		roster: roster, hub: hub, log: log.With().Str("component", "supervisor").Logger(),
+	}
+}
+
+// Start launches registry, transparency, authority, and agents in order, waiting
+// for each tier's readiness. Agent stdout is streamed into the hub.
+func (s *Supervisor) Start(ctx context.Context) error {
+	regURL := "http://" + s.registry
+	tlURL := "http://" + s.transparency
+
+	if err := s.spawn(ctx, "registry", nil, s.bin+"/registry", "--addr", s.registry); err != nil {
+		return err
+	}
+	// internal/registry/service.go registers "GET /search" (returns 200 with an
+	// empty JSON array before any agent has registered).
+	if err := waitReady(ctx, regURL+"/search", 5*time.Second); err != nil {
+		return fmt.Errorf("registry not ready: %w", err)
+	}
+	if err := s.spawn(ctx, "transparency", nil, s.bin+"/transparency", "--addr", s.transparency); err != nil {
+		return err
+	}
+	// internal/tl/service.go registers "GET /pubkey" (returns 200 as soon as the
+	// service's Ed25519 key is loaded; unlike /checkpoint it has no dependency on
+	// log state).
+	if err := waitReady(ctx, tlURL+"/pubkey", 5*time.Second); err != nil {
+		s.log.Warn().Err(err).Msg("transparency readiness probe failed; continuing")
+	}
+	for _, a := range s.roster.Agents {
+		if a.Policy != "authority" {
+			continue
+		}
+		if err := s.spawn(ctx, a.Name, nil, s.bin+"/authority", "--name", a.Name, "--addr", a.Addr, "--registry", regURL); err != nil {
+			return err
+		}
+		if err := waitReady(ctx, a.BaseURL()+"/.well-known/agent-card.json", 5*time.Second); err != nil {
+			s.log.Warn().Err(err).Str("authority", a.Name).Msg("authority readiness probe failed; continuing")
+		}
+	}
+	for _, a := range s.roster.Greeters() {
+		args := []string{
+			"--name", a.Name, "--role", a.Role, "--addr", a.Addr,
+			"--registry", regURL, "--transparency", tlURL,
+			"--policy", a.Policy, "--events", "--allow-trigger",
+		}
+		if a.Policy == "mandate" {
+			args = append(args, "--authority-role", "authority", "--scope", "greet")
+		}
+		if err := s.spawn(ctx, a.Name, s.hub, s.bin+"/agent", args...); err != nil {
+			return err
+		}
+	}
+	for _, a := range s.roster.Greeters() {
+		_ = waitReady(ctx, a.BaseURL()+"/.well-known/agent-card.json", 8*time.Second)
+	}
+	return nil
+}
+
+// spawn starts one child. If hub != nil, the child's stdout is parsed as event
+// JSON lines and ingested (used for agents).
+func (s *Supervisor) spawn(ctx context.Context, name string, hub *Hub, path string, args ...string) error {
+	cmd := exec.CommandContext(ctx, path, args...)
+	if hub != nil {
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return fmt.Errorf("stdout pipe for %s: %w", name, err)
+		}
+		go s.pump(name, hub, stdout)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start %s: %w", name, err)
+	}
+	s.mu.Lock()
+	s.cmds = append(s.cmds, cmd)
+	s.mu.Unlock()
+	s.log.Info().Str("proc", name).Int("pid", cmd.Process.Pid).Msg("spawned")
+	return nil
+}
+
+func (s *Supervisor) pump(name string, hub *Hub, r interface{ Read([]byte) (int, error) }) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 || line[0] != '{' {
+			continue
+		}
+		var e events.Event
+		if err := json.Unmarshal(line, &e); err != nil {
+			continue
+		}
+		hub.Ingest(e)
+	}
+	if err := sc.Err(); err != nil {
+		s.log.Warn().Err(err).Str("proc", name).Msg("stdout scan ended with error")
+	}
+}
+
+// Stop terminates all child processes.
+func (s *Supervisor) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.cmds {
+		if c.Process != nil {
+			_ = c.Process.Kill()
+		}
+	}
+}
+
+func waitReady(ctx context.Context, url string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	cli := &http.Client{Timeout: 500 * time.Millisecond}
+	for time.Now().Before(deadline) {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		resp, err := cli.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode < 500 {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(150 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("timeout waiting for %s", url)
+}
