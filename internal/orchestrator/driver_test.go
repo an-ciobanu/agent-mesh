@@ -8,6 +8,10 @@ import (
 	"testing"
 )
 
+func bookWith(agents ...Agent) *AgentBook {
+	return NewAgentBook(Roster{Agents: agents}, 18300)
+}
+
 func TestDriverCollideCallsInitiatorTrigger(t *testing.T) {
 	var gotBody map[string]string
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -19,13 +23,11 @@ func TestDriverCollideCallsInitiatorTrigger(t *testing.T) {
 	}))
 	defer stub.Close()
 
-	r := Roster{Agents: []Agent{
-		{Name: "Noah", Role: "greeter-open", Policy: "open", Addr: stub.Listener.Addr().String()},
-		{Name: "Ada", Role: "greeter-open", Policy: "open", Addr: "127.0.0.1:1"},
-	}}
-	d := NewDriver(r)
-
-	greetID, err := d.Collide(context.Background(), "Noah", "Ada")
+	b := bookWith(
+		Agent{Name: "Noah", Role: "greeter-open", Policy: "open", Addr: stub.Listener.Addr().String()},
+		Agent{Name: "Ada", Role: "greeter-open", Policy: "open", Addr: "127.0.0.1:1"},
+	)
+	greetID, err := NewDriver(b).Collide(context.Background(), "Noah", "Ada")
 	if err != nil {
 		t.Fatalf("Collide: %v", err)
 	}
@@ -38,11 +40,11 @@ func TestDriverCollideCallsInitiatorTrigger(t *testing.T) {
 }
 
 func TestDriverCollideRejectsAuthorityTarget(t *testing.T) {
-	r := Roster{Agents: []Agent{
-		{Name: "Noah", Role: "greeter-open", Policy: "open", Addr: "127.0.0.1:1"},
-		{Name: "authority-1", Role: "authority", Policy: "authority", Addr: "127.0.0.1:2"},
-	}}
-	if _, err := NewDriver(r).Collide(context.Background(), "Noah", "authority-1"); err == nil {
+	b := bookWith(
+		Agent{Name: "Noah", Role: "greeter-open", Policy: "open", Addr: "127.0.0.1:1"},
+		Agent{Name: "authority-1", Role: "authority", Policy: "authority", Addr: "127.0.0.1:2"},
+	)
+	if _, err := NewDriver(b).Collide(context.Background(), "Noah", "authority-1"); err == nil {
 		t.Fatal("greeting the authority should error")
 	}
 }

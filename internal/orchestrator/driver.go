@@ -12,23 +12,23 @@ import (
 // Driver turns a browser collision into a real agent-to-agent greet by calling
 // the initiator agent's P5a /trigger/greet endpoint.
 type Driver struct {
-	roster Roster
-	http   *http.Client
+	book *AgentBook
+	http *http.Client
 }
 
-// NewDriver builds a Driver over the roster.
-func NewDriver(r Roster) *Driver {
-	return &Driver{roster: r, http: &http.Client{Timeout: 10 * time.Second}}
+// NewDriver builds a Driver over the live agent book.
+func NewDriver(book *AgentBook) *Driver {
+	return &Driver{book: book, http: &http.Client{Timeout: 10 * time.Second}}
 }
 
 // Collide makes agent `from` greet agent `to`. It returns the greet id so the
 // browser can correlate the SSE events. The target must not be the authority.
 func (d *Driver) Collide(ctx context.Context, from, to string) (string, error) {
-	fromAgent, ok := d.roster.ByName(from)
+	fromAgent, ok := d.book.ByName(from)
 	if !ok {
 		return "", fmt.Errorf("unknown initiator %q", from)
 	}
-	toAgent, ok := d.roster.ByName(to)
+	toAgent, ok := d.book.ByName(to)
 	if !ok {
 		return "", fmt.Errorf("unknown target %q", to)
 	}

@@ -24,8 +24,11 @@ type Supervisor struct {
 	hub          *Hub
 	log          zerolog.Logger
 
-	mu   sync.Mutex
-	cmds []*exec.Cmd
+	ctx context.Context
+
+	mu        sync.Mutex
+	cmds      []*exec.Cmd
+	cmdByName map[string]*exec.Cmd
 }
 
 // NewSupervisor builds a supervisor. binDir holds the compiled binaries.
@@ -33,12 +36,14 @@ func NewSupervisor(binDir, registryAddr, transparencyAddr string, roster Roster,
 	return &Supervisor{
 		bin: binDir, registry: registryAddr, transparency: transparencyAddr,
 		roster: roster, hub: hub, log: log.With().Str("component", "supervisor").Logger(),
+		cmdByName: map[string]*exec.Cmd{},
 	}
 }
 
 // Start launches registry, transparency, authority, and agents in order, waiting
 // for each tier's readiness. Agent stdout is streamed into the hub.
 func (s *Supervisor) Start(ctx context.Context) error {
+	s.ctx = ctx
 	regURL := "http://" + s.registry
 	tlURL := "http://" + s.transparency
 
@@ -71,18 +76,7 @@ func (s *Supervisor) Start(ctx context.Context) error {
 		}
 	}
 	for _, a := range s.roster.Greeters() {
-		args := []string{
-			"--name", a.Name, "--role", a.Role, "--addr", a.Addr,
-			"--registry", regURL, "--transparency", tlURL,
-			"--policy", a.Policy, "--events", "--allow-trigger",
-		}
-		if a.Policy == "mandate" {
-			args = append(args, "--authority-role", "authority", "--scope", "greet")
-			if a.Authority != "" {
-				args = append(args, "--authority-name", a.Authority)
-			}
-		}
-		if err := s.spawn(ctx, a.Name, s.hub, s.bin+"/agent", args...); err != nil {
+		if err := s.spawn(ctx, a.Name, s.hub, s.bin+"/agent", s.greeterArgs(a)...); err != nil {
 			return err
 		}
 	}
@@ -90,6 +84,45 @@ func (s *Supervisor) Start(ctx context.Context) error {
 		_ = waitReady(ctx, a.BaseURL()+"/.well-known/agent-card.json", 8*time.Second)
 	}
 	return nil
+}
+
+// greeterArgs builds the CLI args for a greeter agent process.
+func (s *Supervisor) greeterArgs(a Agent) []string {
+	regURL := "http://" + s.registry
+	tlURL := "http://" + s.transparency
+	args := []string{
+		"--name", a.Name, "--role", a.Role, "--addr", a.Addr,
+		"--registry", regURL, "--transparency", tlURL,
+		"--policy", a.Policy, "--events", "--allow-trigger",
+	}
+	if a.Policy == "mandate" {
+		args = append(args, "--authority-role", "authority", "--scope", "greet")
+		if a.Authority != "" {
+			args = append(args, "--authority-name", a.Authority)
+		}
+	}
+	return args
+}
+
+// SpawnOne starts a single greeter at runtime, streaming its events into the hub,
+// and waits briefly for it to become ready. Used by POST /spawn.
+func (s *Supervisor) SpawnOne(a Agent) error {
+	if err := s.spawn(s.ctx, a.Name, s.hub, s.bin+"/agent", s.greeterArgs(a)...); err != nil {
+		return err
+	}
+	return waitReady(s.ctx, a.BaseURL()+"/.well-known/agent-card.json", 8*time.Second)
+}
+
+// Kill terminates a single agent by name (used by POST /despawn).
+func (s *Supervisor) Kill(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cmd, ok := s.cmdByName[name]; ok {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		delete(s.cmdByName, name)
+	}
 }
 
 // spawn starts one child. If hub != nil, the child's stdout is parsed as event
@@ -108,6 +141,7 @@ func (s *Supervisor) spawn(ctx context.Context, name string, hub *Hub, path stri
 	}
 	s.mu.Lock()
 	s.cmds = append(s.cmds, cmd)
+	s.cmdByName[name] = cmd
 	s.mu.Unlock()
 	s.log.Info().Str("proc", name).Int("pid", cmd.Process.Pid).Msg("spawned")
 	return nil
