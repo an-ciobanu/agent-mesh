@@ -18,9 +18,11 @@ import (
 	"github.com/an-ciobanu/agent-mesh/internal/comms/a2a"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/authclient"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/discovery"
+	"github.com/an-ciobanu/agent-mesh/internal/comms/mcp"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/transparency"
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
+	"github.com/an-ciobanu/agent-mesh/internal/nonce"
 	"github.com/an-ciobanu/agent-mesh/internal/policy"
 )
 
@@ -31,9 +33,10 @@ func main() {
 	registryURL := flag.String("registry", "http://127.0.0.1:18090", "registry base URL")
 	keyDir := flag.String("keys", "", "identity key directory (default: ./data/<name>)")
 	transparencyURL := flag.String("transparency", "", "transparency log base URL; enables sealing of accepted greets")
-	policyName := flag.String("policy", "open", "greet policy: open | mandate")
+	policyName := flag.String("policy", "open", "greet policy: open | mandate | nonce")
 	authorityRole := flag.String("authority-role", "authority", "role of the mandate authority (when --policy=mandate)")
 	scope := flag.String("scope", "greet", "required mandate scope (when --policy=mandate)")
+	nonceTTL := flag.Duration("nonce-ttl", 2*time.Minute, "nonce validity window (when --policy=nonce)")
 	flag.Parse()
 
 	log := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Str("agent", *name).Logger()
@@ -65,7 +68,12 @@ func main() {
 		Security: []map[string][]string{}, // open by default
 	}
 
-	if *policyName == "mandate" {
+	var mcpHandler http.Handler
+
+	switch *policyName {
+	case "open":
+		// default greetPolicy (policy.Open{}) and open card already set above.
+	case "mandate":
 		authPeer, authPub := resolveAuthority(ctx, disco, authclient.New(), *authorityRole, log)
 		authorityAns := domain.LocalANSName(authPeer.Name)
 		greetPolicy = policy.NewMandate(selfAns, authorityAns, authPub, *scope, log)
@@ -77,6 +85,21 @@ func main() {
 			Params:      map[string]any{"authorityRole": *authorityRole, "scope": *scope},
 		}}}
 		log.Info().Str("authorityAns", authorityAns).Str("scope", *scope).Msg("mandate policy enabled")
+	case "nonce":
+		store := nonce.NewStore(*nonceTTL)
+		greetPolicy = policy.NewNonce(selfAns, store, log)
+		mcpSrv := mcp.NewServer(log)
+		mcpSrv.Register("get_nonce", store.MCPTool())
+		mcpHandler = mcpSrv.Handler()
+		card.Security = []map[string][]string{{"dpop": {}}}
+		card.Capabilities = &a2a.Capabilities{Extensions: []a2a.Extension{{
+			URI:         a2a.ExtNonceURI,
+			Description: "obtain a nonce via get_nonce and present a DPoP proof",
+			Required:    true,
+		}}}
+		log.Info().Dur("nonceTTL", *nonceTTL).Msg("nonce policy enabled")
+	default:
+		log.Fatal().Str("policy", *policyName).Msg("unknown --policy (want: open | mandate | nonce)")
 	}
 
 	var opts []a2a.Option
@@ -85,7 +108,11 @@ func main() {
 		log.Info().Str("transparency", *transparencyURL).Msg("greet sealing enabled")
 	}
 	greetSvc := a2a.NewGreetService(selfAns, greetPolicy, log, opts...)
-	srv := &http.Server{Addr: *addr, Handler: a2a.NewMux(card, greetSvc, log)}
+	mux := a2a.NewMux(card, greetSvc, log)
+	if mcpHandler != nil {
+		mux.Handle("/mcp", mcpHandler)
+	}
+	srv := &http.Server{Addr: *addr, Handler: mux}
 	go func() {
 		log.Info().Str("addr", *addr).Str("ans", selfAns).Msg("agent listening")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
