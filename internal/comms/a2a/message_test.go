@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -194,5 +195,37 @@ func TestGreetServiceSealsWhenConfigured(t *testing.T) {
 	}
 	if !crypto.VerifyInclusion(crypto.LeafHash(out.Evidence.Statement), out.Evidence.Receipt.EntryIndex, out.Evidence.Receipt.TreeSize, out.Evidence.Receipt.Proof, out.Evidence.Receipt.Root) {
 		t.Fatal("sealed evidence inclusion proof does not verify")
+	}
+}
+
+// failingTP is a domain.Transparency stub whose Seal always errors, so tests
+// can exercise the greeter's best-effort seal-failure path.
+type failingTP struct{}
+
+func (failingTP) Seal(ctx context.Context, statement []byte) (domain.Receipt, error) {
+	return domain.Receipt{}, errors.New("boom")
+}
+
+func TestGreetServiceSucceedsWithoutEvidenceWhenSealFails(t *testing.T) {
+	self := domain.LocalANSName("greeter-open")
+	greeterPriv, _ := crypto.GenerateEd25519()
+	svc := NewGreetService(self, policy.Open{}, zerolog.Nop(), WithSealing(greeterPriv, failingTP{}))
+
+	body, jws := signedGreet(t, domain.LocalANSName("visitor"), self, "hello there")
+	resp := postGreet(t, http.HandlerFunc(svc.HandleMessageSend), body, jws)
+	defer resp.Body.Close()
+
+	var out rpcResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Error != nil {
+		t.Fatalf("unexpected rpc error: %+v", out.Error)
+	}
+	if out.Result == nil {
+		t.Fatal("expected the greet to still succeed when sealing fails")
+	}
+	if out.Evidence != nil {
+		t.Fatal("expected no evidence when sealing fails")
 	}
 }
