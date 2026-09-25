@@ -2,6 +2,7 @@ package a2a
 
 import (
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -17,6 +18,10 @@ const (
 	HeaderRequestJWS = "X-ANS-Request-JWS"
 	// MethodMessageSend is the A2A JSON-RPC method for sending a message.
 	MethodMessageSend = "message/send"
+	// HeaderMandate carries the caller's presented mandate (a COSE_Sign1 over
+	// domain.MandateClaims), base64-std encoded. Optional; a mandate-gated
+	// policy requires it.
+	HeaderMandate = "X-ANS-Mandate"
 )
 
 // GreetPayload is the signed body of a greet: who, to whom, and what.
@@ -141,11 +146,23 @@ func (g *GreetService) HandleMessageSend(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	var mandate []byte
+	if mh := r.Header.Get(HeaderMandate); mh != "" {
+		decoded, derr := base64.StdEncoding.DecodeString(mh)
+		if derr != nil {
+			g.log.Warn().Err(derr).Msg("greet: invalid mandate encoding")
+			g.writeError(w, req.ID, -32602, "invalid mandate encoding")
+			return
+		}
+		mandate = decoded
+	}
+
 	if err := g.policy.Authorize(r.Context(), domain.GreetRequest{
 		CallerAns:           gp.CallerAns,
 		AudienceAns:         gp.AudienceAns,
 		Greeting:            gp.Greeting,
 		CallerKeyThumbprint: thumb,
+		Mandate:             mandate,
 	}); err != nil {
 		g.log.Warn().Err(err).Str("callerAns", gp.CallerAns).Msg("greet: policy rejected")
 		g.writeError(w, req.ID, -32003, "greet not authorized: "+err.Error())

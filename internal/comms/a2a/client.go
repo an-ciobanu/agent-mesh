@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +13,17 @@ import (
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
 )
+
+// SendOption customizes an outbound greet request before it is sent.
+type SendOption func(*http.Request)
+
+// WithMandate attaches a mandate (COSE_Sign1 bytes) to the greet via the
+// X-ANS-Mandate header, base64-std encoded.
+func WithMandate(mandate []byte) SendOption {
+	return func(r *http.Request) {
+		r.Header.Set(HeaderMandate, base64.StdEncoding.EncodeToString(mandate))
+	}
+}
 
 // Client sends A2A greets to peer agents.
 type Client struct {
@@ -26,7 +38,7 @@ func NewClient() *Client {
 // SendGreet signs payload with priv, sends an A2A message/send to endpoint, and
 // returns the peer's reply text plus any transparency evidence the peer sealed
 // (nil if the peer did not seal).
-func (c *Client) SendGreet(ctx context.Context, endpoint string, priv ed25519.PrivateKey, payload GreetPayload) (string, *domain.EvidenceBundle, error) {
+func (c *Client) SendGreet(ctx context.Context, endpoint string, priv ed25519.PrivateKey, payload GreetPayload, opts ...SendOption) (string, *domain.EvidenceBundle, error) {
 	pb, err := json.Marshal(payload)
 	if err != nil {
 		return "", nil, fmt.Errorf("marshal greet payload: %w", err)
@@ -52,6 +64,9 @@ func (c *Client) SendGreet(ctx context.Context, endpoint string, priv ed25519.Pr
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(HeaderRequestJWS, jws)
+	for _, opt := range opts {
+		opt(req)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
