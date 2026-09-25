@@ -1,4 +1,4 @@
-// Package a2a serves and reads A2A Agent Cards.
+// Package a2a serves and reads A2A Agent Cards and handles A2A messages.
 package a2a
 
 import (
@@ -8,8 +8,9 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Card is a minimal A2A Agent Card. Security is an OpenAPI-style list of
-// scheme requirement maps; an empty slice means "open" (no auth).
+// Card is a minimal A2A Agent Card. Security is an OpenAPI-style list of scheme
+// requirement maps; an empty slice means "open" (no auth). URL is filled in
+// dynamically at serve time from the request host.
 type Card struct {
 	Name        string                `json:"name"`
 	Description string                `json:"description,omitempty"`
@@ -18,20 +19,28 @@ type Card struct {
 	Security    []map[string][]string `json:"security"`
 }
 
-// CardHandler serves a fixed Agent Card at /.well-known/agent-card.json.
-func CardHandler(card Card, log zerolog.Logger) http.Handler {
+// serveCard returns a handler that serves card, setting url to this host's /a2a
+// endpoint so the value is correct regardless of the bound port.
+func serveCard(card Card, log zerolog.Logger) http.HandlerFunc {
 	l := log.With().Str("component", "a2a").Logger()
 	if card.Security == nil {
 		card.Security = []map[string][]string{}
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /.well-known/agent-card.json", func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		c := card
+		c.URL = "http://" + r.Host + "/a2a"
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(card); err != nil {
+		if err := json.NewEncoder(w).Encode(c); err != nil {
 			l.Error().Err(err).Msg("encode agent card")
 			return
 		}
-		l.Debug().Str("name", card.Name).Msg("served agent card")
-	})
+		l.Debug().Str("name", c.Name).Msg("served agent card")
+	}
+}
+
+// CardHandler serves only the Agent Card at /.well-known/agent-card.json.
+func CardHandler(card Card, log zerolog.Logger) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /.well-known/agent-card.json", serveCard(card, log))
 	return mux
 }
