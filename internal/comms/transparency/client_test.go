@@ -2,6 +2,9 @@ package transparency
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -47,5 +50,112 @@ func TestClientSealAndFetchPubKey(t *testing.T) {
 	}
 	if !signer.Equal(tlPub) {
 		t.Fatal("receipt signer != fetched TL pubkey")
+	}
+}
+
+func TestClientSealReturnsErrorOnServerError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL)
+	if _, err := c.Seal(context.Background(), []byte("stmt")); err == nil {
+		t.Fatal("expected error for a 500 seal response")
+	}
+}
+
+func TestClientSealReturnsErrorOnNonJSONBody(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("not json"))
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL)
+	if _, err := c.Seal(context.Background(), []byte("stmt")); err == nil {
+		t.Fatal("expected error for a non-JSON receipt body")
+	}
+}
+
+func TestClientFetchPubKeyReturnsErrorOnServerError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL)
+	if _, err := c.FetchPubKey(context.Background()); err == nil {
+		t.Fatal("expected error for a 500 pubkey response")
+	}
+}
+
+func TestClientFetchPubKeyRejectsWrongKeyType(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(crypto.JWK{Kty: "RSA", Crv: "Ed25519", X: "AA"})
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL)
+	if _, err := c.FetchPubKey(context.Background()); err == nil {
+		t.Fatal("expected error for a non-OKP/Ed25519 JWK")
+	}
+}
+
+func TestClientFetchPubKeyRejectsBadBase64(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(crypto.JWK{Kty: "OKP", Crv: "Ed25519", X: "not-valid-base64!!"})
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL)
+	if _, err := c.FetchPubKey(context.Background()); err == nil {
+		t.Fatal("expected error for invalid base64 in x")
+	}
+}
+
+func TestClientSealReturnsErrorOnInvalidBaseURL(t *testing.T) {
+	// A control character in the URL makes request construction itself fail.
+	c := New("http://\x7f")
+	if _, err := c.Seal(context.Background(), []byte("stmt")); err == nil {
+		t.Fatal("expected error for an invalid base URL")
+	}
+}
+
+func TestClientSealReturnsErrorOnUnreachableServer(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	ts.Close() // now nothing is listening
+	c := New(ts.URL)
+	if _, err := c.Seal(context.Background(), []byte("stmt")); err == nil {
+		t.Fatal("expected error for an unreachable server")
+	}
+}
+
+func TestClientFetchPubKeyReturnsErrorOnInvalidBaseURL(t *testing.T) {
+	c := New("http://\x7f")
+	if _, err := c.FetchPubKey(context.Background()); err == nil {
+		t.Fatal("expected error for an invalid base URL")
+	}
+}
+
+func TestClientFetchPubKeyReturnsErrorOnUnreachableServer(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	ts.Close()
+	c := New(ts.URL)
+	if _, err := c.FetchPubKey(context.Background()); err == nil {
+		t.Fatal("expected error for an unreachable server")
+	}
+}
+
+func TestClientFetchPubKeyRejectsWrongKeyLength(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		short := base64.RawURLEncoding.EncodeToString([]byte{1, 2, 3})
+		_ = json.NewEncoder(w).Encode(crypto.JWK{Kty: "OKP", Crv: "Ed25519", X: short})
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL)
+	if _, err := c.FetchPubKey(context.Background()); err == nil {
+		t.Fatal("expected error for a wrong-length embedded key")
 	}
 }
