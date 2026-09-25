@@ -149,6 +149,10 @@ const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 const logEl = document.getElementById('log'), countEl = document.getElementById('count');
 const COL = { simple:'#f4523b', nonce:'#f2c94c', token:'#4aa3ff', authority:'#8b93a7' };
 const LABEL = { simple:'simple', nonce:'nonce', token:'token', authority:'authority' };
+// Interactions carry the greeter's POLICY (open|mandate|nonce); COL/LABEL are
+// keyed by UI TYPE (simple|token|nonce). Map policy -> UI type before lookup.
+const POLICY2TYPE = { open:'simple', mandate:'token', nonce:'nonce', authority:'authority', simple:'simple', token:'token' };
+const uiType = t => POLICY2TYPE[t] || t || 'simple';
 let W, H, DPR;
 function resize(){ DPR = window.devicePixelRatio||1; W = cv.clientWidth; H = cv.clientHeight;
   cv.width = W*DPR; cv.height = H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); }
@@ -237,7 +241,7 @@ function updateLogEntry(it){
   const el = logRows[it.greetId]; if (!el) return;
   const v = it.verdict;
   el.className = 'ev ' + (v==='accepted'?'ok':v==='rejected'?'bad':'pending');
-  const typeTag = it.type ? `<span class="tag" style="color:${COL[it.type]||'#8b93a7'}">${LABEL[it.type]||it.type}</span>` : '';
+  const typeTag = it.type ? `<span class="tag" style="color:${COL[uiType(it.type)]||'#8b93a7'}">${LABEL[uiType(it.type)]||it.type}</span>` : '';
   let html = `<div class="top"><span class="who">${it.from||'?'} → ${it.to||'?'} ${typeTag}</span>${badgeFor(v)}</div>`;
   const step = v==='accepted' ? 'identity JWS ✓ · gate ✓'
              : v==='rejected' ? ('gate rejected'+(it.reason?' — '+it.reason:''))
@@ -310,7 +314,7 @@ function setActiveRow(greetId){
 // modelFromEvents(); the lane/row/arrow/expandable-raw markup is unchanged.
 function renderDrawer(d){
   const n = d.lanes.length;
-  dTitle.innerHTML = `${d.from} → ${d.to} <span style="color:${COL[d.type]||'var(--muted)'}">· ${LABEL[d.type]||d.type||''}</span>`;
+  dTitle.innerHTML = `${d.from} → ${d.to} <span style="color:${COL[uiType(d.type)]||'var(--muted)'}">· ${LABEL[uiType(d.type)]||d.type||''}</span>`;
   dVerdict.textContent = d.accepted ? 'ACCEPTED' : 'REJECTED';
   dVerdict.style.color = d.accepted ? 'var(--ok)' : 'var(--bad)';
   dTime.textContent = d.time;
