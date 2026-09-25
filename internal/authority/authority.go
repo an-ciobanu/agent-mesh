@@ -60,6 +60,66 @@ func (a *Authority) IssueMandate(subjectAns, audienceAns, scope string) ([]byte,
 	return cose, nil
 }
 
+// IssueSpendMandate builds a spend-mandate authorizing subject to buy itemID from
+// audience for at most maxAmount (smallest currency unit) in currency, and returns
+// it as a COSE_Sign1 signed by the authority. Scope is fixed to ScopePurchase.
+func (a *Authority) IssueSpendMandate(subjectAns, audienceAns, itemID string, maxAmount int64, currency string) ([]byte, error) {
+	if subjectAns == "" || audienceAns == "" || itemID == "" || currency == "" {
+		return nil, fmt.Errorf("subjectAns, audienceAns, itemID and currency are required")
+	}
+	if maxAmount <= 0 {
+		return nil, fmt.Errorf("maxAmount must be > 0")
+	}
+	now := time.Now().UTC()
+	claims := domain.SpendMandateClaims{
+		MandateID:    "spend-" + randHex(8),
+		SubjectAns:   subjectAns,
+		AudienceAns:  audienceAns,
+		ItemID:       itemID,
+		MaxAmount:    maxAmount,
+		Currency:     currency,
+		Scope:        domain.ScopePurchase,
+		NotBefore:    now.Format(time.RFC3339),
+		NotAfter:     now.Add(a.ttl).Format(time.RFC3339),
+		AuthorityAns: a.ans,
+	}
+	b, err := json.Marshal(claims)
+	if err != nil {
+		return nil, fmt.Errorf("marshal spend claims: %w", err)
+	}
+	cose, err := crypto.SignCOSE1(a.priv, b)
+	if err != nil {
+		return nil, fmt.Errorf("sign spend mandate: %w", err)
+	}
+	a.log.Info().Str("mandateId", claims.MandateID).Str("subjectAns", subjectAns).
+		Str("audienceAns", audienceAns).Str("itemId", itemID).Int64("maxAmount", maxAmount).
+		Str("currency", currency).Msg("spend mandate issued")
+	return cose, nil
+}
+
+type spendArgs struct {
+	SubjectAns  string `json:"subjectAns"`
+	AudienceAns string `json:"audienceAns"`
+	ItemID      string `json:"itemId"`
+	MaxAmount   int64  `json:"maxAmount"`
+	Currency    string `json:"currency"`
+}
+
+// SpendMCPTool returns the issue_spend_mandate MCP tool handler.
+func (a *Authority) SpendMCPTool() mcp.ToolFunc {
+	return func(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
+		var in spendArgs
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+		cose, err := a.IssueSpendMandate(in.SubjectAns, in.AudienceAns, in.ItemID, in.MaxAmount, in.Currency)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(issueResult{MandateCOSE: cose})
+	}
+}
+
 type issueArgs struct {
 	SubjectAns  string `json:"subjectAns"`
 	AudienceAns string `json:"audienceAns"`

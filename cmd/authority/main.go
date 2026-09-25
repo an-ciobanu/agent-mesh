@@ -52,6 +52,7 @@ func main() {
 
 	mcpSrv := mcp.NewServer(log)
 	mcpSrv.Register("issue_mandate", auth.MCPTool())
+	mcpSrv.Register("issue_spend_mandate", auth.SpendMCPTool())
 
 	baseURL := "http://" + *addr
 	card := a2a.Card{Name: *name, Version: "0.1.0", Security: []map[string][]string{}}
