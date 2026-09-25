@@ -78,6 +78,9 @@ func (s *Supervisor) Start(ctx context.Context) error {
 		}
 		if a.Policy == "mandate" {
 			args = append(args, "--authority-role", "authority", "--scope", "greet")
+			if a.Authority != "" {
+				args = append(args, "--authority-name", a.Authority)
+			}
 		}
 		if err := s.spawn(ctx, a.Name, s.hub, s.bin+"/agent", args...); err != nil {
 			return err

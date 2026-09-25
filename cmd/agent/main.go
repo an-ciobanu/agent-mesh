@@ -41,6 +41,7 @@ func main() {
 	transparencyURL := flag.String("transparency", "", "transparency log base URL; enables sealing of accepted greets")
 	policyName := flag.String("policy", "open", "greet policy: open | mandate | nonce")
 	authorityRole := flag.String("authority-role", "authority", "role of the mandate authority (when --policy=mandate)")
+	authorityName := flag.String("authority-name", "", "specific authority to trust by name (when --policy=mandate); empty = first discovered")
 	scope := flag.String("scope", "greet", "required mandate scope (when --policy=mandate)")
 	nonceTTL := flag.Duration("nonce-ttl", 2*time.Minute, "nonce validity window (when --policy=nonce)")
 	emitEvents := flag.Bool("events", false, "emit per-step greet events as JSON lines to stdout")
@@ -87,7 +88,7 @@ func main() {
 	case "open":
 		// default greetPolicy (policy.Open{}) and open card already set above.
 	case "mandate":
-		authPeer, authPub := resolveAuthority(ctx, disco, authclient.New(), *authorityRole, log)
+		authPeer, authPub := resolveAuthority(ctx, disco, authclient.New(), *authorityRole, *authorityName, log)
 		authorityAns := domain.LocalANSName(authPeer.Name)
 		greetPolicy = policy.NewMandate(selfAns, authorityAns, authPub, *scope, log)
 		card.Security = []map[string][]string{{"mandate": {}}}
@@ -95,7 +96,7 @@ func main() {
 			URI:         a2a.ExtMandateURI,
 			Description: "present a mandate from the authority",
 			Required:    true,
-			Params:      map[string]any{"authorityRole": *authorityRole, "scope": *scope},
+			Params:      map[string]any{"authorityRole": *authorityRole, "authorityAns": authorityAns, "scope": *scope},
 		}}}
 		log.Info().Str("authorityAns", authorityAns).Str("scope", *scope).Msg("mandate policy enabled")
 	case "nonce":
@@ -242,22 +243,28 @@ func auditEvidence(ctx context.Context, tlURL string, evidence *domain.EvidenceB
 	})
 }
 
-// resolveAuthority discovers the authority of the given role and pins its public
-// key, retrying to tolerate startup races. A mandate greeter cannot serve
-// without a pinned authority key, so failure is fatal (fail closed).
-func resolveAuthority(ctx context.Context, disco *discovery.Client, ac *authclient.Client, role string, log zerolog.Logger) (domain.AgentInfo, ed25519.PublicKey) {
+// resolveAuthority discovers the authority of the given role — optionally the one
+// named `name` — and pins its public key, retrying to tolerate startup races. A
+// mandate greeter cannot serve without a pinned authority key, so failure is
+// fatal (fail closed).
+func resolveAuthority(ctx context.Context, disco *discovery.Client, ac *authclient.Client, role, name string, log zerolog.Logger) (domain.AgentInfo, ed25519.PublicKey) {
 	for i := 0; i < 20; i++ {
 		peers, err := disco.Search(ctx, role)
 		if err == nil && len(peers) > 0 {
-			pub, perr := ac.FetchPubKey(ctx, peers[0].BaseURL)
-			if perr == nil {
-				log.Info().Str("authority", peers[0].Name).Str("baseURL", peers[0].BaseURL).Msg("pinned authority key")
-				return peers[0], pub
+			for _, p := range peers {
+				if name != "" && p.Name != name {
+					continue
+				}
+				pub, perr := ac.FetchPubKey(ctx, p.BaseURL)
+				if perr == nil {
+					log.Info().Str("authority", p.Name).Str("baseURL", p.BaseURL).Msg("pinned authority key")
+					return p, pub
+				}
+				log.Warn().Err(perr).Str("authority", p.Name).Msg("fetch authority pubkey; retrying")
 			}
-			log.Warn().Err(perr).Msg("fetch authority pubkey; retrying")
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	log.Fatal().Str("role", role).Msg("could not resolve/pin the authority; a mandate greeter cannot start without it")
+	log.Fatal().Str("role", role).Str("name", name).Msg("could not resolve/pin the authority; a mandate greeter cannot start without it")
 	return domain.AgentInfo{}, nil // unreachable
 }

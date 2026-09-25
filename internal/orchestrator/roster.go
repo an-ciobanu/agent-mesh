@@ -14,12 +14,13 @@ const (
 
 // Agent is one member of the demo mesh.
 type Agent struct {
-	Name   string `json:"name"`
-	Role   string `json:"role"`
-	Policy string `json:"policy"` // open | nonce | mandate | authority
-	Type   string `json:"type"`   // simple | nonce | token | authority (UI)
-	Color  string `json:"color"`
-	Addr   string `json:"-"` // host:port (not exposed to the browser)
+	Name      string `json:"name"`
+	Role      string `json:"role"`
+	Policy    string `json:"policy"` // open | nonce | mandate | authority
+	Type      string `json:"type"`   // simple | nonce | token | authority (UI)
+	Color     string `json:"color"`
+	Addr      string `json:"-"` // host:port (not exposed to the browser)
+	Authority string `json:"-"` // for mandate greeters: the authority (name) this greeter trusts
 }
 
 // BaseURL returns the agent's HTTP base URL.
@@ -66,16 +67,25 @@ func mkAgent(name, role, policy, addr string) Agent {
 	return a
 }
 
+// mkMandate builds a token greeter that trusts the named authority.
+func mkMandate(name, role, addr, authority string) Agent {
+	a := mkAgent(name, role, "mandate", addr)
+	a.Authority = authority
+	return a
+}
+
 // DefaultRoster is the demo's fixed set of agents. Circles in the UI are these
 // real processes; the count is a launch-time property (real OS processes), not a
 // browser slider.
 func DefaultRoster() Roster {
 	return Roster{Agents: []Agent{
 		mkAgent("authority-1", "authority", "authority", "127.0.0.1:18110"),
+		mkAgent("authority-2", "authority", "authority", "127.0.0.1:18111"),
 		mkAgent("Ada", "greeter-open", "open", "127.0.0.1:18201"),
 		mkAgent("Noah", "greeter-open", "open", "127.0.0.1:18202"),
 		mkAgent("Ema", "greeter-open", "open", "127.0.0.1:18205"),
 		mkAgent("Zoe", "greeter-nonce", "nonce", "127.0.0.1:18203"),
-		mkAgent("Chris", "greeter-mandate", "mandate", "127.0.0.1:18204"),
+		mkMandate("Chris", "greeter-mandate", "127.0.0.1:18204", "authority-1"),
+		mkMandate("Kai", "greeter-mandate", "127.0.0.1:18206", "authority-2"),
 	}}
 }

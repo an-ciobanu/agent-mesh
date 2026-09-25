@@ -42,3 +42,27 @@ func TestGreetersHaveDistinctAddrs(t *testing.T) {
 		seen[a.Addr] = true
 	}
 }
+
+func TestRosterHasTwoAuthoritiesAndTrustWiring(t *testing.T) {
+	r := DefaultRoster()
+	var auth int
+	for _, a := range r.Agents {
+		if a.Policy == "authority" {
+			auth++
+		}
+	}
+	if auth != 2 {
+		t.Fatalf("want 2 authorities, got %d", auth)
+	}
+	chris, _ := r.ByName("Chris")
+	kai, ok := r.ByName("Kai")
+	if !ok {
+		t.Fatal("expected a second token greeter 'Kai'")
+	}
+	if chris.Policy != "mandate" || chris.Authority != "authority-1" {
+		t.Fatalf("Chris should trust authority-1: %+v", chris)
+	}
+	if kai.Policy != "mandate" || kai.Authority != "authority-2" {
+		t.Fatalf("Kai should trust authority-2: %+v", kai)
+	}
+}
