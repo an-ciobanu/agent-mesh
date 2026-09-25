@@ -38,6 +38,8 @@ func main() {
 	if dir == "" {
 		dir = filepath.Join("data", *name)
 	}
+	// Provisioned now so the identity is stable across restarts; unused for
+	// signing until P2, when agents start signing their own responses.
 	if _, err := crypto.LoadOrCreateEd25519(filepath.Join(dir, "id_ed25519.seed")); err != nil {
 		log.Fatal().Err(err).Msg("load identity key")
 	}
@@ -45,9 +47,10 @@ func main() {
 	baseURL := "http://" + *addr
 	selfAns := domain.LocalANSName(*name)
 	card := a2a.Card{
-		Name:     *name,
-		URL:      baseURL + "/a2a",
-		Version:  "0.1.0",
+		Name:    *name,
+		Version: "0.1.0",
+		// URL is left unset here: serveCard fills it in per-request from the
+		// request host, so it is correct regardless of the bound port.
 		Security: []map[string][]string{}, // open (P1)
 	}
 	greetSvc := a2a.NewGreetService(selfAns, policy.Open{}, log)
