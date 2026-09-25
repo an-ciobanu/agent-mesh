@@ -18,6 +18,7 @@ import (
 	"github.com/an-ciobanu/agent-mesh/internal/comms/discovery"
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
+	"github.com/an-ciobanu/agent-mesh/internal/policy"
 )
 
 func main() {
@@ -42,16 +43,17 @@ func main() {
 	}
 
 	baseURL := "http://" + *addr
+	selfAns := domain.LocalANSName(*name)
 	card := a2a.Card{
 		Name:     *name,
-		URL:      baseURL,
+		URL:      baseURL + "/a2a",
 		Version:  "0.1.0",
-		Security: []map[string][]string{}, // open (P0)
+		Security: []map[string][]string{}, // open (P1)
 	}
-
-	srv := &http.Server{Addr: *addr, Handler: a2a.CardHandler(card, log)}
+	greetSvc := a2a.NewGreetService(selfAns, policy.Open{}, log)
+	srv := &http.Server{Addr: *addr, Handler: a2a.NewMux(card, greetSvc, log)}
 	go func() {
-		log.Info().Str("addr", *addr).Msg("agent listening")
+		log.Info().Str("addr", *addr).Str("ans", selfAns).Msg("agent listening")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal().Err(err).Msg("agent server exited")
 		}
