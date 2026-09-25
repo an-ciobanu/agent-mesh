@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
+	"github.com/an-ciobanu/agent-mesh/internal/domain"
 )
 
 // Client sends A2A greets to peer agents.
@@ -23,15 +24,16 @@ func NewClient() *Client {
 }
 
 // SendGreet signs payload with priv, sends an A2A message/send to endpoint, and
-// returns the peer's reply text.
-func (c *Client) SendGreet(ctx context.Context, endpoint string, priv ed25519.PrivateKey, payload GreetPayload) (string, error) {
+// returns the peer's reply text plus any transparency evidence the peer sealed
+// (nil if the peer did not seal).
+func (c *Client) SendGreet(ctx context.Context, endpoint string, priv ed25519.PrivateKey, payload GreetPayload) (string, *domain.EvidenceBundle, error) {
 	pb, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("marshal greet payload: %w", err)
+		return "", nil, fmt.Errorf("marshal greet payload: %w", err)
 	}
 	jws, err := crypto.SignJWS(priv, pb)
 	if err != nil {
-		return "", fmt.Errorf("sign greet: %w", err)
+		return "", nil, fmt.Errorf("sign greet: %w", err)
 	}
 
 	body, err := json.Marshal(rpcRequest{
@@ -41,34 +43,34 @@ func (c *Client) SendGreet(ctx context.Context, endpoint string, priv ed25519.Pr
 		Params:  messageParams{Message: Message{Role: "user", Parts: []Part{{Kind: "text", Text: payload.Greeting}}}},
 	})
 	if err != nil {
-		return "", fmt.Errorf("marshal rpc request: %w", err)
+		return "", nil, fmt.Errorf("marshal rpc request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
+		return "", nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(HeaderRequestJWS, jws)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("send greet: %w", err)
+		return "", nil, fmt.Errorf("send greet: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("greet: unexpected status %d", resp.StatusCode)
+		return "", nil, fmt.Errorf("greet: unexpected status %d", resp.StatusCode)
 	}
 
 	var out rpcResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
+		return "", nil, fmt.Errorf("decode response: %w", err)
 	}
 	if out.Error != nil {
-		return "", fmt.Errorf("greet rejected: %s (code %d)", out.Error.Message, out.Error.Code)
+		return "", nil, fmt.Errorf("greet rejected: %s (code %d)", out.Error.Message, out.Error.Code)
 	}
 	if out.Result == nil || len(out.Result.Parts) == 0 {
-		return "", fmt.Errorf("greet: empty reply")
+		return "", nil, fmt.Errorf("greet: empty reply")
 	}
-	return out.Result.Parts[0].Text, nil
+	return out.Result.Parts[0].Text, out.Evidence, nil
 }

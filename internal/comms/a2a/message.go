@@ -1,8 +1,10 @@
 package a2a
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -53,24 +55,53 @@ type rpcError struct {
 }
 
 type rpcResponse struct {
-	JSONRPC string    `json:"jsonrpc"`
-	ID      int       `json:"id"`
-	Result  *Message  `json:"result,omitempty"`
-	Error   *rpcError `json:"error,omitempty"`
+	JSONRPC  string                 `json:"jsonrpc"`
+	ID       int                    `json:"id"`
+	Result   *Message               `json:"result,omitempty"`
+	Evidence *domain.EvidenceBundle `json:"evidence,omitempty"` // sealed greet.completed evidence (P2)
+	Error    *rpcError              `json:"error,omitempty"`
 }
 
-// GreetService handles inbound A2A greets: verify the caller's proof of
-// possession of a signing key (the ANS name itself is self-asserted in P1),
-// enforce the agent's GreetPolicy, and reply.
+// greetEvent is the canonical "greet.completed" statement payload that is
+// COSE-signed and sealed into the transparency log.
+type greetEvent struct {
+	Type                string `json:"type"`
+	CallerAns           string `json:"callerAns"`
+	AudienceAns         string `json:"audienceAns"`
+	Greeting            string `json:"greeting"`
+	CallerKeyThumbprint string `json:"callerKeyThumbprint"`
+	At                  string `json:"at"`
+}
+
+// GreetService handles inbound A2A greets: verify caller identity, enforce the
+// agent's GreetPolicy, optionally seal the completed greet, and reply.
 type GreetService struct {
 	selfAns string
 	policy  domain.GreetPolicy
+	priv    ed25519.PrivateKey  // greeter identity key; signs sealed statements
+	tp      domain.Transparency // nil => sealing disabled
 	log     zerolog.Logger
 }
 
+// Option configures a GreetService.
+type Option func(*GreetService)
+
+// WithSealing enables transparency sealing: on each accepted greet the service
+// signs a greet.completed statement with priv and seals it via tp.
+func WithSealing(priv ed25519.PrivateKey, tp domain.Transparency) Option {
+	return func(g *GreetService) {
+		g.priv = priv
+		g.tp = tp
+	}
+}
+
 // NewGreetService builds a greet handler for an agent whose ANS name is selfAns.
-func NewGreetService(selfAns string, p domain.GreetPolicy, log zerolog.Logger) *GreetService {
-	return &GreetService{selfAns: selfAns, policy: p, log: log.With().Str("component", "a2a").Logger()}
+func NewGreetService(selfAns string, p domain.GreetPolicy, log zerolog.Logger, opts ...Option) *GreetService {
+	g := &GreetService{selfAns: selfAns, policy: p, log: log.With().Str("component", "a2a").Logger()}
+	for _, o := range opts {
+		o(g)
+	}
+	return g
 }
 
 // HandleMessageSend implements POST /a2a (A2A message/send) for greets.
@@ -98,6 +129,7 @@ func (g *GreetService) HandleMessageSend(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	thumb := crypto.Thumbprint(jwk)
+
 	var gp GreetPayload
 	if err := json.Unmarshal(payload, &gp); err != nil {
 		g.writeError(w, req.ID, -32602, "invalid greet payload")
@@ -120,21 +152,55 @@ func (g *GreetService) HandleMessageSend(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	g.log.Info().Str("callerAns", gp.CallerAns).Str("greeting", gp.Greeting).Str("callerKeyThumbprint", thumb).Msg("greet accepted")
+	evidence := g.seal(r, gp, thumb)
+
+	g.log.Info().Str("callerAns", gp.CallerAns).Str("callerKeyThumbprint", thumb).Bool("sealed", evidence != nil).Msg("greet accepted")
 	g.writeResult(w, req.ID, &Message{
 		Role:  "agent",
 		Parts: []Part{{Kind: "text", Text: "hi " + gp.CallerAns + ", this is " + g.selfAns}},
-	})
+	}, evidence)
 }
 
-func (g *GreetService) writeResult(w http.ResponseWriter, id int, msg *Message) {
+// seal signs a greet.completed statement and seals it to the transparency log.
+// Sealing is best-effort: a failure is logged at ERROR and the greet still
+// succeeds without evidence (the greeting is the primary function).
+func (g *GreetService) seal(r *http.Request, gp GreetPayload, thumb string) *domain.EvidenceBundle {
+	if g.tp == nil || g.priv == nil {
+		return nil
+	}
+	event, err := json.Marshal(greetEvent{
+		Type:                "greet.completed",
+		CallerAns:           gp.CallerAns,
+		AudienceAns:         gp.AudienceAns,
+		Greeting:            gp.Greeting,
+		CallerKeyThumbprint: thumb,
+		At:                  time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		g.log.Error().Err(err).Msg("seal: marshal event")
+		return nil
+	}
+	statement, err := crypto.SignCOSE1(g.priv, event)
+	if err != nil {
+		g.log.Error().Err(err).Msg("seal: sign statement")
+		return nil
+	}
+	receipt, err := g.tp.Seal(r.Context(), statement)
+	if err != nil {
+		g.log.Error().Err(err).Msg("seal: transparency seal")
+		return nil
+	}
+	g.log.Info().Int("entryIndex", receipt.EntryIndex).Int("treeSize", receipt.TreeSize).Msg("greet sealed")
+	return &domain.EvidenceBundle{Statement: statement, Receipt: receipt}
+}
+
+func (g *GreetService) writeResult(w http.ResponseWriter, id int, msg *Message, evidence *domain.EvidenceBundle) {
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(rpcResponse{JSONRPC: "2.0", ID: id, Result: msg}); err != nil {
+	if err := json.NewEncoder(w).Encode(rpcResponse{JSONRPC: "2.0", ID: id, Result: msg, Evidence: evidence}); err != nil {
 		g.log.Error().Err(err).Msg("greet: encode result")
 	}
 }
 
-// writeError emits a JSON-RPC error object (HTTP 200 per JSON-RPC convention).
 func (g *GreetService) writeError(w http.ResponseWriter, id, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(rpcResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: message}}); err != nil {

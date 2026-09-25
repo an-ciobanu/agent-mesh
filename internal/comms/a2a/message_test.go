@@ -11,9 +11,11 @@ import (
 
 	"github.com/rs/zerolog"
 
+	commstl "github.com/an-ciobanu/agent-mesh/internal/comms/transparency"
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
 	"github.com/an-ciobanu/agent-mesh/internal/policy"
+	"github.com/an-ciobanu/agent-mesh/internal/tl"
 )
 
 func signedGreet(t *testing.T, callerAns, audienceAns, greeting string) (body []byte, jws string) {
@@ -166,3 +168,31 @@ func TestGreetServiceRejectsUnparseableBody(t *testing.T) {
 }
 
 var _ = context.Background // context used indirectly via handler
+
+func TestGreetServiceSealsWhenConfigured(t *testing.T) {
+	tlPriv, _ := crypto.GenerateEd25519()
+	tlSrv := httptest.NewServer(tl.NewService(tlPriv, zerolog.Nop()).Handler())
+	defer tlSrv.Close()
+
+	self := domain.LocalANSName("greeter-open")
+	greeterPriv, _ := crypto.GenerateEd25519()
+	svc := NewGreetService(self, policy.Open{}, zerolog.Nop(), WithSealing(greeterPriv, commstl.New(tlSrv.URL)))
+
+	body, jws := signedGreet(t, domain.LocalANSName("visitor"), self, "hello there")
+	resp := postGreet(t, http.HandlerFunc(svc.HandleMessageSend), body, jws)
+	defer resp.Body.Close()
+
+	var out rpcResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Error != nil {
+		t.Fatalf("unexpected rpc error: %+v", out.Error)
+	}
+	if out.Evidence == nil {
+		t.Fatal("expected sealed evidence in the response")
+	}
+	if !crypto.VerifyInclusion(crypto.LeafHash(out.Evidence.Statement), out.Evidence.Receipt.EntryIndex, out.Evidence.Receipt.TreeSize, out.Evidence.Receipt.Proof, out.Evidence.Receipt.Root) {
+		t.Fatal("sealed evidence inclusion proof does not verify")
+	}
+}
