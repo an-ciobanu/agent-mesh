@@ -49,6 +49,12 @@ func InclusionProof(leaves [][]byte, index int) [][]byte {
 
 // VerifyInclusion checks that leaf at index, in a tree of the given size with the
 // supplied audit path, reproduces root (RFC 6962 §2.1.1).
+//
+// size only shapes how the audit path is traversed; it is not itself a
+// cryptographic anchor. The root is what's actually verified, so callers must
+// trust the (size, root) pair as a unit obtained from a source they trust (in
+// this codebase, a TL receipt co-signs {entryIndex, treeSize, root} so the
+// pair cannot be substituted independently).
 func VerifyInclusion(leaf []byte, index, size int, proof [][]byte, root []byte) bool {
 	if index < 0 || index >= size {
 		return false
@@ -62,6 +68,10 @@ func VerifyInclusion(leaf []byte, index, size int, proof [][]byte, root []byte) 
 		}
 		if fn%2 == 1 || fn == sn {
 			computed = nodeHash(proof[pi], computed)
+			// Terminates: this loop only has iterations to run when fn is
+			// even, which (given the enclosing fn%2==1||fn==sn branch) means
+			// fn==sn>0 here; each iteration halves both until fn goes odd or
+			// reaches 0, bounding it by log2(sn).
 			for fn%2 == 0 {
 				fn >>= 1
 				sn >>= 1
