@@ -1,0 +1,7 @@
+# Brainstorming scratch (visual companion)
+.superpowers/
+
+# Go
+bin/
+*.test
+*.out
