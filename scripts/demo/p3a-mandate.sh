@@ -24,6 +24,6 @@ sleep 1
 echo "== meshctl mandate-check =="
 OUT=$(./bin/meshctl mandate-check --registry "http://$REG_ADDR" --subject visitor --audience greeter-mandate --scope greet)
 echo "$OUT"
-echo "$OUT" | grep -q "mandate issued and verified OK"
+echo "$OUT" | grep -q "signature self-verifies OK"
 
 echo "P3a demo OK"

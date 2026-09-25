@@ -192,6 +192,9 @@ func runMandateCheck(args []string) {
 
 	fmt.Printf("mandate %s: subject=%s audience=%s scope=%s (valid %s..%s)\n",
 		claims.MandateID, claims.SubjectAns, claims.AudienceAns, claims.Scope, claims.NotBefore, claims.NotAfter)
-	fmt.Printf("signed by authority %s (key %s)\n", claims.AuthorityAns, crypto.Thumbprint(crypto.PublicJWK(authPub)))
-	fmt.Println("mandate issued and verified OK")
+	fmt.Printf("signing key %s, self-asserted authority %s\n", crypto.Thumbprint(crypto.PublicJWK(authPub)), claims.AuthorityAns)
+	// The mandate's COSE signature self-verifies (the signer key is embedded),
+	// but P3a does not yet pin that key to the trusted authority's published
+	// key — that authority-key pinning is the P3b guard's job.
+	fmt.Println("mandate issued; signature self-verifies OK (authority-key pinning deferred to P3b)")
 }
