@@ -5,3 +5,6 @@
 bin/
 *.test
 *.out
+
+# Runtime identity key seeds (never commit)
+data/
