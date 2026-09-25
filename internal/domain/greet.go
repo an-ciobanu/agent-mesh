@@ -13,6 +13,12 @@ type GreetRequest struct {
 	// CallerAns belongs to that key: in P1, CallerAns is self-asserted by the
 	// caller. Binding CallerAns to a registered key is deferred to P2/P3.
 	CallerKeyThumbprint string
+
+	// Mandate is the caller-presented authorization: a COSE_Sign1 over
+	// domain.MandateClaims, or nil if none was presented. A mandate-gated
+	// GreetPolicy verifies and pins it to a trusted authority; an open policy
+	// ignores it.
+	Mandate []byte
 }
 
 // GreetPolicy decides whether an agent accepts a greet. Implementations are the
