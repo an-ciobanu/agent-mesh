@@ -11,6 +11,7 @@
     --nonce:  #f2c94c;   /* nonce         = yellow */
     --token:  #4aa3ff;   /* token/mandate = blue   */
     --authority: #8b93a7;/* authority     = gray   */
+    --acp: #a774ff;      /* acp seller    = purple */
     --ok: #3fb950; --bad: #f85149; --wire: #56607a;
   }
   * { box-sizing: border-box; }
@@ -170,11 +171,11 @@
 <script>
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 const logEl = document.getElementById('log'), countEl = document.getElementById('count');
-const COL = { simple:'#f4523b', nonce:'#f2c94c', token:'#4aa3ff', authority:'#8b93a7' };
-const LABEL = { simple:'simple', nonce:'nonce', token:'token', authority:'authority' };
+const COL = { simple:'#f4523b', nonce:'#f2c94c', token:'#4aa3ff', authority:'#8b93a7', acp:'#a774ff' };
+const LABEL = { simple:'simple', nonce:'nonce', token:'token', authority:'authority', acp:'acp seller' };
 // Interactions carry the greeter's POLICY (open|mandate|nonce); COL/LABEL are
 // keyed by UI TYPE (simple|token|nonce). Map policy -> UI type before lookup.
-const POLICY2TYPE = { open:'simple', mandate:'token', nonce:'nonce', authority:'authority', simple:'simple', token:'token' };
+const POLICY2TYPE = { open:'simple', mandate:'token', nonce:'nonce', authority:'authority', simple:'simple', token:'token', acp:'acp', seller:'acp' };
 const uiType = t => POLICY2TYPE[t] || t || 'simple';
 let W, H, DPR;
 function resize(){ DPR = window.devicePixelRatio||1; W = cv.clientWidth; H = cv.clientHeight;
@@ -220,6 +221,8 @@ function startEvents(){
     if (e.step === 'requirement' && e.detail && e.detail.type) it.type = e.detail.type;
     if (e.step === 'greet.reply')    it.verdict = 'accepted';
     if (e.step === 'greet.rejected'){ it.verdict = 'rejected'; it.reason = (e.detail && e.detail.error) || it.reason; }
+    if (e.step === 'receipt')          it.verdict = 'accepted';
+    if (e.step === 'purchase.rejected'){ it.verdict = 'rejected'; it.reason = (e.detail && e.detail.error) || it.reason; }
     if (e.step === 'gate' && e.status === 'fail' && !it.reason) it.reason = e.detail && e.detail.reason;
     updateLogEntry(it);
     drawLinkFor(it);
@@ -305,6 +308,16 @@ const STEP = {
   'greet.reply':     {title:'reply received',                   explain:'greeter accepted and replied',                                          kind:'msg'},
   'greet.rejected':  {title:'greet rejected',                   explain:'greeter refused the greet — fail closed',                               kind:'msg'},
   'audience':        {title:'audience check',                   explain:'greet was not addressed to this greeter',                               kind:'chk'},
+  'catalog.fetch':     {title:'fetch catalog · GET /acp/catalog',   explain:'buyer reads the seller\'s items and prices — discovered, not hardcoded',   kind:'msg'},
+  'item.select':       {title:'select item',                        explain:'buyer picks the cheapest item to purchase',                               kind:'note'},
+  'spend.acquire':     {title:'acquire spend-mandate · MCP issue_spend_mandate', explain:'buyer obtains an authority-signed mandate for THIS item and price',    kind:'msg'},
+  'checkout.create':   {title:'create checkout · POST /acp/checkout_sessions',   explain:'buyer opens a checkout session for the chosen item',                  kind:'msg'},
+  'checkout.complete': {title:'complete checkout · POST …/complete', explain:'buyer submits the spend-mandate to pay',                                   kind:'msg'},
+  'session.create':    {title:'open checkout session',              explain:'seller prices the session and awaits payment',                            kind:'chk'},
+  'spend.verify':      {title:'verify spend-mandate',               explain:'seller checks the mandate signature (self-verifying COSE)',                kind:'chk'},
+  'charge':            {title:'charge · Stripe PaymentIntent',      explain:'seller settles a real test-mode charge for the item price',               kind:'msg'},
+  'receipt':           {title:'receipt',                            explain:'payment succeeded — the transaction is complete',                         kind:'msg'},
+  'purchase.rejected': {title:'purchase rejected',                  explain:'seller refused to charge — fail closed',                                  kind:'msg'},
 };
 
 function modelFromEvents(it){
@@ -313,7 +326,8 @@ function modelFromEvents(it){
     const actor = e.role === 'initiator' ? it.from : it.to;
     let peer = null;
     if (meta.kind === 'msg') {
-      if (e.step === 'mandate.acquire') peer = (e.detail && e.detail.authority) || 'authority';
+      if (e.step === 'mandate.acquire' || e.step === 'spend.acquire') peer = (e.detail && e.detail.authority) || 'authority';
+      else if (e.step === 'charge') peer = 'Stripe';
       else peer = (actor === it.from) ? it.to : it.from;
     }
     return { actor, color: agentColor(actor), peer, title: meta.title, explain: meta.explain,
@@ -417,8 +431,13 @@ function step(){
         a.vx=-Math.abs(a.vx)*Math.sign(dx||1); b.vx=Math.abs(b.vx)*Math.sign(dx||1); [a.vy,b.vy]=[b.vy,a.vy];
         const k=pairKey(i,j), t=performance.now();
         if (!cooldown.get(k) || t-cooldown.get(k) > 2500){ cooldown.set(k,t);
-          let ini=i, tgt=j; if (agents[tgt].type==='authority'){ ini=j; tgt=i; }
-          if (agents[tgt].type!=='authority'){ agents[ini].flash=1; agents[tgt].flash=1; collide(agents[ini].name, agents[tgt].name); }
+          const canInit = x => x.type==='simple' || x.type==='nonce' || x.type==='token';
+          let ini=-1, tgt=-1;
+          if (canInit(agents[i])) { ini=i; tgt=j; }
+          else if (canInit(agents[j])) { ini=j; tgt=i; }
+          if (ini>=0 && agents[tgt].type!=='authority'){
+            agents[ini].flash=1; agents[tgt].flash=1; collide(agents[ini].name, agents[tgt].name);
+          }
         }
       }
     }

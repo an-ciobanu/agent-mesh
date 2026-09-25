@@ -66,6 +66,13 @@ func (h *Hub) Ingest(e events.Event) {
 		if r := e.Detail["error"]; r != "" {
 			it.Reason = r
 		}
+	case "receipt":
+		it.Verdict = "accepted"
+	case "purchase.rejected":
+		it.Verdict = "rejected"
+		if r := e.Detail["error"]; r != "" {
+			it.Reason = r
+		}
 	case "gate":
 		if e.Status == events.StatusFail && it.Reason == "" {
 			it.Reason = e.Detail["reason"]
