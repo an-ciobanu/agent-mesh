@@ -16,6 +16,7 @@ import (
 
 	"github.com/an-ciobanu/agent-mesh/internal/comms/a2a"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/discovery"
+	"github.com/an-ciobanu/agent-mesh/internal/comms/transparency"
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
 	"github.com/an-ciobanu/agent-mesh/internal/policy"
@@ -27,6 +28,7 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:18101", "listen address")
 	registryURL := flag.String("registry", "http://127.0.0.1:18090", "registry base URL")
 	keyDir := flag.String("keys", "", "identity key directory (default: ./data/<name>)")
+	transparencyURL := flag.String("transparency", "", "transparency log base URL; enables sealing of accepted greets")
 	flag.Parse()
 
 	log := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Str("agent", *name).Logger()
@@ -38,9 +40,8 @@ func main() {
 	if dir == "" {
 		dir = filepath.Join("data", *name)
 	}
-	// Provisioned now so the identity is stable across restarts; unused for
-	// signing until P2, when agents start signing their own responses.
-	if _, err := crypto.LoadOrCreateEd25519(filepath.Join(dir, "id_ed25519.seed")); err != nil {
+	priv, err := crypto.LoadOrCreateEd25519(filepath.Join(dir, "id_ed25519.seed"))
+	if err != nil {
 		log.Fatal().Err(err).Msg("load identity key")
 	}
 
@@ -53,7 +54,12 @@ func main() {
 		// request host, so it is correct regardless of the bound port.
 		Security: []map[string][]string{}, // open (P1)
 	}
-	greetSvc := a2a.NewGreetService(selfAns, policy.Open{}, log)
+	var opts []a2a.Option
+	if *transparencyURL != "" {
+		opts = append(opts, a2a.WithSealing(priv, transparency.New(*transparencyURL)))
+		log.Info().Str("transparency", *transparencyURL).Msg("greet sealing enabled")
+	}
+	greetSvc := a2a.NewGreetService(selfAns, policy.Open{}, log, opts...)
 	srv := &http.Server{Addr: *addr, Handler: a2a.NewMux(card, greetSvc, log)}
 	go func() {
 		log.Info().Str("addr", *addr).Str("ans", selfAns).Msg("agent listening")
