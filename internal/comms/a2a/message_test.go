@@ -113,4 +113,56 @@ func TestGreetServiceRejectsWrongMethod(t *testing.T) {
 	}
 }
 
+func TestGreetServiceRejectsInvalidJWS(t *testing.T) {
+	self := domain.LocalANSName("greeter-open")
+	svc := NewGreetService(self, policy.Open{}, zerolog.Nop())
+	body, _ := signedGreet(t, domain.LocalANSName("visitor"), self, "hi")
+
+	resp := postGreet(t, http.HandlerFunc(svc.HandleMessageSend), body, "a.b.c")
+	defer resp.Body.Close()
+	var out rpcResponse
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if out.Error == nil {
+		t.Fatal("expected rpc error for an invalid (unparseable) identity proof")
+	}
+}
+
+func TestGreetServiceRejectsNonJSONPayload(t *testing.T) {
+	self := domain.LocalANSName("greeter-open")
+	svc := NewGreetService(self, policy.Open{}, zerolog.Nop())
+
+	priv, err := crypto.GenerateEd25519()
+	if err != nil {
+		t.Fatal(err)
+	}
+	jws, err := crypto.SignJWS(priv, []byte("not json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rpc := rpcRequest{JSONRPC: "2.0", ID: 1, Method: MethodMessageSend,
+		Params: messageParams{Message: Message{Role: "user", Parts: []Part{{Kind: "text", Text: "hi"}}}}}
+	body, _ := json.Marshal(rpc)
+
+	resp := postGreet(t, http.HandlerFunc(svc.HandleMessageSend), body, jws)
+	defer resp.Body.Close()
+	var out rpcResponse
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if out.Error == nil {
+		t.Fatal("expected rpc error when the signed payload is not valid greet JSON")
+	}
+}
+
+func TestGreetServiceRejectsUnparseableBody(t *testing.T) {
+	self := domain.LocalANSName("greeter-open")
+	svc := NewGreetService(self, policy.Open{}, zerolog.Nop())
+
+	resp := postGreet(t, http.HandlerFunc(svc.HandleMessageSend), []byte("{"), "")
+	defer resp.Body.Close()
+	var out rpcResponse
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if out.Error == nil {
+		t.Fatal("expected rpc error for an unparseable request body")
+	}
+}
+
 var _ = context.Background // context used indirectly via handler
