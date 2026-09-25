@@ -19,6 +19,17 @@ type GreetRequest struct {
 	// GreetPolicy verifies and pins it to a trusted authority; an open policy
 	// ignores it.
 	Mandate []byte
+
+	// DPoPProof is the caller-presented RFC 9449 proof-of-possession (an ES256
+	// compact JWS over a fresh nonce), or "" if none. A nonce-gated GreetPolicy
+	// verifies it; other policies ignore it.
+	DPoPProof string
+
+	// HTTPMethod and HTTPURL are the request's method and URL (scheme+host+path),
+	// used to bind a DPoP proof's htm/htu claims to this request. Empty for
+	// non-HTTP callers.
+	HTTPMethod string
+	HTTPURL    string
 }
 
 // GreetPolicy decides whether an agent accepts a greet. Implementations are the
