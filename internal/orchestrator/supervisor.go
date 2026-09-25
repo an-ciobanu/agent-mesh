@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -24,6 +25,9 @@ type Supervisor struct {
 	hub          *Hub
 	log          zerolog.Logger
 
+	stripeEnv     []string // extra "K=V" entries injected into spawned children
+	sellerPayment string   // ACP seller funding backend override ("stripe" | "fake")
+
 	ctx context.Context
 
 	mu        sync.Mutex
@@ -39,6 +43,12 @@ func NewSupervisor(binDir, registryAddr, transparencyAddr string, roster Roster,
 		cmdByName: map[string]*exec.Cmd{},
 	}
 }
+
+// WithChildEnv sets extra environment entries ("K=V") passed to spawned agents.
+func (s *Supervisor) WithChildEnv(env []string) { s.stripeEnv = env }
+
+// WithSellerPayment overrides the ACP seller funding backend ("stripe" | "fake").
+func (s *Supervisor) WithSellerPayment(mode string) { s.sellerPayment = mode }
 
 // Start launches registry, transparency, authority, and agents in order, waiting
 // for each tier's readiness. Agent stdout is streamed into the hub.
@@ -90,6 +100,18 @@ func (s *Supervisor) Start(ctx context.Context) error {
 func (s *Supervisor) greeterArgs(a Agent) []string {
 	regURL := "http://" + s.registry
 	tlURL := "http://" + s.transparency
+	if a.Policy == "acp" {
+		payment := s.sellerPayment
+		if payment == "" {
+			payment = "stripe"
+		}
+		return []string{
+			"--name", a.Name, "--role", a.Role, "--addr", a.Addr,
+			"--registry", regURL, "--acp", "--payment", payment,
+			"--authority-role", "authority", "--authority-name", a.Authority,
+			"--events",
+		}
+	}
 	args := []string{
 		"--name", a.Name, "--role", a.Role, "--addr", a.Addr,
 		"--registry", regURL, "--transparency", tlURL,
@@ -129,6 +151,9 @@ func (s *Supervisor) Kill(name string) {
 // JSON lines and ingested (used for agents).
 func (s *Supervisor) spawn(ctx context.Context, name string, hub *Hub, path string, args ...string) error {
 	cmd := exec.CommandContext(ctx, path, args...)
+	if len(s.stripeEnv) > 0 {
+		cmd.Env = append(os.Environ(), s.stripeEnv...)
+	}
 	if hub != nil {
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {

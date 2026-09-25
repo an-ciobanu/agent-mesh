@@ -35,15 +35,26 @@ func (d *Driver) Collide(ctx context.Context, from, to string) (string, error) {
 	if toAgent.Policy == "authority" {
 		return "", fmt.Errorf("the authority is not greetable")
 	}
-	body, _ := json.Marshal(map[string]string{"toRole": toAgent.Role, "toName": toAgent.Name, "text": "hi " + toAgent.Name})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fromAgent.BaseURL()+"/trigger/greet", bytes.NewReader(body))
+	if fromAgent.Policy == "authority" || fromAgent.Type == "acp" {
+		return "", fmt.Errorf("%q cannot initiate", from)
+	}
+	if toAgent.Type == "acp" {
+		return d.post(ctx, fromAgent.BaseURL()+"/trigger/buy", map[string]string{"toName": toAgent.Name})
+	}
+	return d.post(ctx, fromAgent.BaseURL()+"/trigger/greet",
+		map[string]string{"toRole": toAgent.Role, "toName": toAgent.Name, "text": "hi " + toAgent.Name})
+}
+
+func (d *Driver) post(ctx context.Context, url string, payload map[string]string) (string, error) {
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := d.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("trigger %s: %w", from, err)
+		return "", fmt.Errorf("trigger: %w", err)
 	}
 	defer resp.Body.Close()
 	var out struct {

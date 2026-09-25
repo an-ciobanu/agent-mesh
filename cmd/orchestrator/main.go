@@ -25,6 +25,7 @@ func main() {
 	webDir := flag.String("web", "web", "directory containing index.html")
 	registryAddr := flag.String("registry", "127.0.0.1:18090", "registry listen address")
 	tlAddr := flag.String("transparency", "127.0.0.1:18091", "transparency log listen address")
+	stripeEnvPath := flag.String("stripe-env", "data/stripe.env", "path to KEY=VALUE file with STRIPE_SECRET_KEY for ACP sellers")
 	flag.Parse()
 
 	log := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Str("component", "orchestrator").Logger()
@@ -38,6 +39,16 @@ func main() {
 	defer cancel()
 
 	sup := orchestrator.NewSupervisor(*binDir, *registryAddr, *tlAddr, roster, hub, log)
+	if env := orchestrator.LoadStripeEnv(*stripeEnvPath); len(env) > 0 {
+		var kv []string
+		for k, v := range env {
+			kv = append(kv, k+"="+v)
+		}
+		sup.WithChildEnv(kv)
+		log.Info().Str("path", *stripeEnvPath).Msg("loaded Stripe env for ACP sellers")
+	} else {
+		log.Warn().Str("path", *stripeEnvPath).Msg("no Stripe env found; ACP sellers will fail to start (add data/stripe.env)")
+	}
 	if err := sup.Start(ctx); err != nil {
 		log.Fatal().Err(err).Msg("start mesh")
 	}

@@ -66,3 +66,25 @@ func TestRosterHasTwoAuthoritiesAndTrustWiring(t *testing.T) {
 		t.Fatalf("Kai should trust authority-2: %+v", kai)
 	}
 }
+
+func TestDefaultRosterIncludesACPSeller(t *testing.T) {
+	r := DefaultRoster()
+	var sellers int
+	for _, a := range r.Agents {
+		if a.Type == "acp" {
+			sellers++
+			if a.Color != ColorACP {
+				t.Fatalf("seller %q color = %q, want %q", a.Name, a.Color, ColorACP)
+			}
+			if a.Policy != "acp" || a.Role != "seller" {
+				t.Fatalf("seller %q policy/role = %q/%q", a.Name, a.Policy, a.Role)
+			}
+			if a.Authority == "" {
+				t.Fatalf("seller %q has no authority", a.Name)
+			}
+		}
+	}
+	if sellers == 0 {
+		t.Fatal("expected at least one ACP seller in the default roster")
+	}
+}

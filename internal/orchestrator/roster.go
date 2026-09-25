@@ -10,6 +10,7 @@ const (
 	ColorNonce     = "#f2c94c" // nonce  greeter -> yellow
 	ColorToken     = "#4aa3ff" // mandate greeter -> blue
 	ColorAuthority = "#8b93a7" // authority -> gray
+	ColorACP       = "#a774ff" // ACP seller -> purple
 )
 
 // Agent is one member of the demo mesh.
@@ -21,6 +22,7 @@ type Agent struct {
 	Color     string `json:"color"`
 	Addr      string `json:"-"` // host:port (not exposed to the browser)
 	Authority string `json:"-"` // for mandate greeters: the authority (name) this greeter trusts
+	Protocol  string `json:"-"` // for sellers: "acp"
 }
 
 // BaseURL returns the agent's HTTP base URL.
@@ -63,6 +65,8 @@ func mkAgent(name, role, policy, addr string) Agent {
 		a.Type, a.Color = "token", ColorToken
 	case "authority":
 		a.Type, a.Color = "authority", ColorAuthority
+	case "acp":
+		a.Type, a.Color = "acp", ColorACP
 	}
 	return a
 }
@@ -70,6 +74,14 @@ func mkAgent(name, role, policy, addr string) Agent {
 // mkMandate builds a token greeter that trusts the named authority.
 func mkMandate(name, role, addr, authority string) Agent {
 	a := mkAgent(name, role, "mandate", addr)
+	a.Authority = authority
+	return a
+}
+
+// mkSeller builds an ACP seller that trusts the named authority for spend-mandates.
+func mkSeller(name, addr, authority string) Agent {
+	a := mkAgent(name, "seller", "acp", addr)
+	a.Protocol = "acp"
 	a.Authority = authority
 	return a
 }
@@ -87,5 +99,6 @@ func DefaultRoster() Roster {
 		mkAgent("Zoe", "greeter-nonce", "nonce", "127.0.0.1:18203"),
 		mkMandate("Chris", "greeter-mandate", "127.0.0.1:18204", "authority-1"),
 		mkMandate("Kai", "greeter-mandate", "127.0.0.1:18206", "authority-2"),
+		mkSeller("Shopa", "127.0.0.1:18207", "authority-1"),
 	}}
 }

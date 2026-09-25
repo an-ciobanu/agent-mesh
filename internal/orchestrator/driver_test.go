@@ -48,3 +48,26 @@ func TestDriverCollideRejectsAuthorityTarget(t *testing.T) {
 		t.Fatal("greeting the authority should error")
 	}
 }
+
+func TestCollideRoutesSellerToBuy(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewEncoder(w).Encode(map[string]string{"greetId": "g1"})
+	}))
+	defer srv.Close()
+	addr := srv.Listener.Addr().String()
+
+	roster := Roster{Agents: []Agent{
+		{Name: "Ada", Role: "greeter-open", Policy: "open", Type: "simple", Addr: addr},
+		{Name: "shop-acp", Role: "seller", Policy: "acp", Type: "acp", Addr: "127.0.0.1:1"},
+	}}
+	book := NewAgentBook(roster, 19999)
+	d := NewDriver(book)
+	if _, err := d.Collide(context.Background(), "Ada", "shop-acp"); err != nil {
+		t.Fatalf("collide: %v", err)
+	}
+	if gotPath != "/trigger/buy" {
+		t.Fatalf("path = %q, want /trigger/buy", gotPath)
+	}
+}
