@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
 )
@@ -20,7 +21,7 @@ type Client struct {
 
 // New returns a discovery client for the given registry base URL.
 func New(registryBaseURL string) *Client {
-	return &Client{base: registryBaseURL, http: http.DefaultClient}
+	return &Client{base: registryBaseURL, http: &http.Client{Timeout: 5 * time.Second}}
 }
 
 // Register publishes this agent's discovery record.
