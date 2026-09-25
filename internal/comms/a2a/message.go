@@ -59,8 +59,9 @@ type rpcResponse struct {
 	Error   *rpcError `json:"error,omitempty"`
 }
 
-// GreetService handles inbound A2A greets: verify caller identity, enforce the
-// agent's GreetPolicy, and reply.
+// GreetService handles inbound A2A greets: verify the caller's proof of
+// possession of a signing key (the ANS name itself is self-asserted in P1),
+// enforce the agent's GreetPolicy, and reply.
 type GreetService struct {
 	selfAns string
 	policy  domain.GreetPolicy
@@ -90,12 +91,13 @@ func (g *GreetService) HandleMessageSend(w http.ResponseWriter, r *http.Request)
 		g.writeError(w, req.ID, -32000, "missing identity proof")
 		return
 	}
-	payload, _, err := crypto.VerifyJWS(jws)
+	payload, jwk, err := crypto.VerifyJWS(jws)
 	if err != nil {
 		g.log.Warn().Err(err).Msg("greet: identity proof invalid")
 		g.writeError(w, req.ID, -32001, "invalid identity proof")
 		return
 	}
+	thumb := crypto.Thumbprint(jwk)
 	var gp GreetPayload
 	if err := json.Unmarshal(payload, &gp); err != nil {
 		g.writeError(w, req.ID, -32602, "invalid greet payload")
@@ -108,16 +110,17 @@ func (g *GreetService) HandleMessageSend(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := g.policy.Authorize(r.Context(), domain.GreetRequest{
-		CallerAns:   gp.CallerAns,
-		AudienceAns: gp.AudienceAns,
-		Greeting:    gp.Greeting,
+		CallerAns:           gp.CallerAns,
+		AudienceAns:         gp.AudienceAns,
+		Greeting:            gp.Greeting,
+		CallerKeyThumbprint: thumb,
 	}); err != nil {
 		g.log.Warn().Err(err).Str("callerAns", gp.CallerAns).Msg("greet: policy rejected")
 		g.writeError(w, req.ID, -32003, "greet not authorized: "+err.Error())
 		return
 	}
 
-	g.log.Info().Str("callerAns", gp.CallerAns).Str("greeting", gp.Greeting).Msg("greet accepted")
+	g.log.Info().Str("callerAns", gp.CallerAns).Str("greeting", gp.Greeting).Str("callerKeyThumbprint", thumb).Msg("greet accepted")
 	g.writeResult(w, req.ID, &Message{
 		Role:  "agent",
 		Parts: []Part{{Kind: "text", Text: "hi " + gp.CallerAns + ", this is " + g.selfAns}},

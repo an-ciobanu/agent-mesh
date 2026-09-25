@@ -7,6 +7,12 @@ type GreetRequest struct {
 	CallerAns   string
 	AudienceAns string
 	Greeting    string
+
+	// CallerKeyThumbprint is the RFC 7638 JWK thumbprint of the key that signed
+	// the greet — proof that the caller possesses that key. It does NOT prove
+	// CallerAns belongs to that key: in P1, CallerAns is self-asserted by the
+	// caller. Binding CallerAns to a registered key is deferred to P2/P3.
+	CallerKeyThumbprint string
 }
 
 // GreetPolicy decides whether an agent accepts a greet. Implementations are the
