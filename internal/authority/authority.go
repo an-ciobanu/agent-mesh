@@ -26,6 +26,7 @@ type Authority struct {
 }
 
 // New returns an authority named ans that signs mandates valid for ttl.
+// ttl must be > 0; a non-positive ttl produces immediately-expired mandates.
 func New(ans string, priv ed25519.PrivateKey, ttl time.Duration, log zerolog.Logger) *Authority {
 	return &Authority{ans: ans, priv: priv, ttl: ttl, log: log.With().Str("component", "authority").Logger()}
 }
@@ -86,6 +87,10 @@ func (a *Authority) MCPTool() mcp.ToolFunc {
 
 func randHex(n int) string {
 	b := make([]byte, n)
+	// rand.Read never returns an error on supported platforms (it aborts the
+	// process if the OS entropy source fails); the mandate ID is an identifier,
+	// not a security nonce (security comes from the COSE signature), so the
+	// error is intentionally not handled.
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }

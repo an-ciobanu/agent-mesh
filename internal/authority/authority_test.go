@@ -74,3 +74,20 @@ func TestMCPToolIssuesMandate(t *testing.T) {
 		t.Fatalf("tool mandate does not verify: %v", err)
 	}
 }
+
+func TestMCPToolRejectsMalformedArgs(t *testing.T) {
+	priv, _ := crypto.GenerateEd25519()
+	a := New(domain.LocalANSName("authority-1"), priv, time.Hour, zerolog.Nop())
+	if _, err := a.MCPTool()(context.Background(), json.RawMessage("{")); err == nil {
+		t.Fatal("expected error for malformed tool arguments")
+	}
+}
+
+func TestMCPToolPropagatesIssuanceError(t *testing.T) {
+	priv, _ := crypto.GenerateEd25519()
+	a := New(domain.LocalANSName("authority-1"), priv, time.Hour, zerolog.Nop())
+	args, _ := json.Marshal(map[string]string{"subjectAns": "", "audienceAns": domain.LocalANSName("x"), "scope": "greet"})
+	if _, err := a.MCPTool()(context.Background(), args); err == nil {
+		t.Fatal("expected issuance validation error to propagate through the tool")
+	}
+}
