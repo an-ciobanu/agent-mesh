@@ -15,6 +15,7 @@ import (
 	commstl "github.com/an-ciobanu/agent-mesh/internal/comms/transparency"
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
+	"github.com/an-ciobanu/agent-mesh/internal/events"
 	"github.com/an-ciobanu/agent-mesh/internal/policy"
 	"github.com/an-ciobanu/agent-mesh/internal/tl"
 )
@@ -46,6 +47,59 @@ func postGreet(t *testing.T, h http.Handler, body []byte, jws string) *http.Resp
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec.Result()
+}
+
+// postSignedGreet builds a signed greet from callerName to audienceName, posts
+// it to svc's HandleMessageSend, applying any headerMutators (e.g. to set
+// X-ANS-Greet-Id) before sending, and returns the raw recorder. It reuses
+// signedGreet for the wire body/JWS and does not alter it.
+func postSignedGreet(t *testing.T, svc *GreetService, callerName, audienceName, greeting string, headerMutators ...func(http.Header)) *httptest.ResponseRecorder {
+	t.Helper()
+	body, jws := signedGreet(t, domain.LocalANSName(callerName), domain.LocalANSName(audienceName), greeting)
+	req := httptest.NewRequest(http.MethodPost, "/a2a", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(HeaderRequestJWS, jws)
+	for _, m := range headerMutators {
+		m(req.Header)
+	}
+	rec := httptest.NewRecorder()
+	svc.HandleMessageSend(rec, req)
+	return rec
+}
+
+func TestHandleMessageSendEmitsResponderEvents(t *testing.T) {
+	var buf bytes.Buffer
+	em := events.NewJSONEmitter(&buf)
+
+	svc := NewGreetService(domain.LocalANSName("ema"), policy.Open{},
+		zerolog.Nop(), WithEvents(em, "ema", "greeter-open"))
+
+	rr := postSignedGreet(t, svc, "chris", "ema", "hi", func(h http.Header) {
+		h.Set(HeaderGreetID, "g42")
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rr.Code, rr.Body.String())
+	}
+
+	var sawJWS, sawGate bool
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var e events.Event
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatalf("bad event line %q: %v", line, err)
+		}
+		if e.GreetID != "g42" || e.Agent != "ema" || e.Role != events.RoleResponder {
+			t.Fatalf("wrong scope on event: %+v", e)
+		}
+		switch e.Step {
+		case "jws.verify":
+			sawJWS = e.Status == events.StatusOK
+		case "gate":
+			sawGate = e.Status == events.StatusOK
+		}
+	}
+	if !sawJWS || !sawGate {
+		t.Fatalf("missing responder events: jws=%v gate=%v (%s)", sawJWS, sawGate, buf.String())
+	}
 }
 
 func TestGreetServiceAcceptsSignedGreet(t *testing.T) {

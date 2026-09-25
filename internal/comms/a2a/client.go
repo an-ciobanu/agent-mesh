@@ -33,6 +33,16 @@ func WithDPoP(proof string) SendOption {
 	}
 }
 
+// WithGreetID sets the greet-id correlation header so the responder's events
+// share the initiator's id. Empty id is a no-op (the responder will mint one).
+func WithGreetID(id string) SendOption {
+	return func(h http.Header) {
+		if id != "" {
+			h.Set(HeaderGreetID, id)
+		}
+	}
+}
+
 // Client sends A2A greets to peer agents.
 type Client struct {
 	http *http.Client
