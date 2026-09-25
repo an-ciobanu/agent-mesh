@@ -10,6 +10,7 @@ import (
 	"github.com/an-ciobanu/agent-mesh/internal/audit"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/a2a"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/discovery"
+	"github.com/an-ciobanu/agent-mesh/internal/comms/mcp"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/resolver"
 	commstl "github.com/an-ciobanu/agent-mesh/internal/comms/transparency"
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
@@ -44,7 +45,7 @@ func TestP2B_GreetSealAudit(t *testing.T) {
 	}
 
 	priv, _ := crypto.GenerateEd25519()
-	_, evidence, _, err := greet.Initiate(ctx, disco, resolver.New(), a2a.NewClient(), priv, domain.LocalANSName("visitor"), "greeter", "hello there")
+	_, evidence, _, err := greet.Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(), priv, domain.LocalANSName("visitor"), "greeter", "hello there")
 	if err != nil {
 		t.Fatalf("greet: %v", err)
 	}

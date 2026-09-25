@@ -10,6 +10,7 @@ import (
 
 	"github.com/an-ciobanu/agent-mesh/internal/comms/a2a"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/discovery"
+	"github.com/an-ciobanu/agent-mesh/internal/comms/mcp"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/resolver"
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
@@ -40,7 +41,7 @@ func TestP1_SimpleGreetEndToEnd(t *testing.T) {
 
 	priv, _ := crypto.GenerateEd25519()
 	caller := domain.LocalANSName("visitor")
-	reply, _, peer, err := greet.Initiate(ctx, disco, resolver.New(), a2a.NewClient(), priv, caller, "greeter", "hello there")
+	reply, _, peer, err := greet.Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(), priv, caller, "greeter", "hello there")
 	if err != nil {
 		t.Fatalf("greet: %v", err)
 	}

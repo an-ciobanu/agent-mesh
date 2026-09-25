@@ -70,6 +70,7 @@ func runGreet(args []string) {
 		discovery.New(*registryURL),
 		resolver.New(),
 		a2a.NewClient(),
+		mcp.NewClient(),
 		priv, callerAns, *toRole, *text,
 	)
 	if err != nil {

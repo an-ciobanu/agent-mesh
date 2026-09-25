@@ -11,6 +11,7 @@ import (
 
 	"github.com/an-ciobanu/agent-mesh/internal/comms/a2a"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/discovery"
+	"github.com/an-ciobanu/agent-mesh/internal/comms/mcp"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/resolver"
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
@@ -39,7 +40,7 @@ func TestInitiateGreetsDiscoveredOpenPeer(t *testing.T) {
 
 	priv, _ := crypto.GenerateEd25519()
 	caller := domain.LocalANSName("visitor")
-	reply, _, peer, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(), priv, caller, "greeter", "hello there")
+	reply, _, peer, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(), priv, caller, "greeter", "hello there")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,13 +74,13 @@ func TestInitiateErrorsWhenPeerRequiresAuth(t *testing.T) {
 	}
 
 	priv, _ := crypto.GenerateEd25519()
-	_, _, _, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(),
+	_, _, _, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(),
 		priv, domain.LocalANSName("visitor"), "greeter", "hi")
 	if err == nil {
 		t.Fatal("expected error when the peer requires authentication")
 	}
-	if !strings.Contains(err.Error(), "not supported in P1") {
-		t.Fatalf("error = %q, want it to mention P1 is not supported", err.Error())
+	if !strings.Contains(err.Error(), "requires unsupported authentication") {
+		t.Fatalf("error = %q, want it to mention unsupported authentication", err.Error())
 	}
 }
 
@@ -88,7 +89,7 @@ func TestInitiateErrorsWhenNoPeer(t *testing.T) {
 	defer reg.Close()
 
 	priv, _ := crypto.GenerateEd25519()
-	_, _, _, err := Initiate(context.Background(), discovery.New(reg.URL), resolver.New(), a2a.NewClient(),
+	_, _, _, err := Initiate(context.Background(), discovery.New(reg.URL), resolver.New(), a2a.NewClient(), mcp.NewClient(),
 		priv, domain.LocalANSName("visitor"), "greeter", "hi")
 	if err == nil {
 		t.Fatal("expected error when no agent of the role exists")
