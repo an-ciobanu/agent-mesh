@@ -26,7 +26,7 @@ func (c *Client) Call(ctx context.Context, endpoint, tool string, args any) (jso
 		return nil, fmt.Errorf("marshal args: %w", err)
 	}
 	body, err := json.Marshal(rpcRequest{
-		JSONRPC: "2.0", ID: 1, Method: MethodToolsCall,
+		JSONRPC: "2.0", ID: json.RawMessage("1"), Method: MethodToolsCall,
 		Params: callParams{Name: tool, Arguments: argsJSON},
 	})
 	if err != nil {

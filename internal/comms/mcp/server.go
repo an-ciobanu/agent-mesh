@@ -13,6 +13,9 @@ import (
 // MethodToolsCall is the MCP JSON-RPC method for invoking a tool.
 const MethodToolsCall = "tools/call"
 
+// maxRequestBytes bounds an incoming MCP request body (fail closed on oversize).
+const maxRequestBytes = 1 << 20 // 1 MiB
+
 // ToolFunc handles one tool invocation: it receives the raw JSON arguments and
 // returns a raw JSON payload (delivered to the client as the tool's text result).
 type ToolFunc func(ctx context.Context, args json.RawMessage) (json.RawMessage, error)
@@ -28,7 +31,8 @@ func NewServer(log zerolog.Logger) *Server {
 	return &Server{tools: make(map[string]ToolFunc), log: log.With().Str("component", "mcp").Logger()}
 }
 
-// Register adds a tool under name.
+// Register adds a tool under name. Register is not safe for concurrent use:
+// register all tools before calling Handler and serving requests.
 func (s *Server) Register(name string, fn ToolFunc) { s.tools[name] = fn }
 
 // Handler serves POST /mcp.
@@ -44,10 +48,10 @@ type callParams struct {
 }
 
 type rpcRequest struct {
-	JSONRPC string     `json:"jsonrpc"`
-	ID      int        `json:"id"`
-	Method  string     `json:"method"`
-	Params  callParams `json:"params"`
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Method  string          `json:"method"`
+	Params  callParams      `json:"params"`
 }
 
 type contentBlock struct {
@@ -66,25 +70,29 @@ type rpcError struct {
 }
 
 type rpcResponse struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      int         `json:"id"`
-	Result  *toolResult `json:"result,omitempty"`
-	Error   *rpcError   `json:"error,omitempty"`
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  *toolResult     `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
 }
 
 func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytes)
 	var req rpcRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.writeError(w, 0, -32700, "parse error")
+		s.log.Warn().Err(err).Msg("mcp: rejected malformed request")
+		s.writeError(w, nil, -32700, "parse error")
 		return
 	}
 	if req.Method != MethodToolsCall {
+		s.log.Warn().Str("method", req.Method).Msg("mcp: rejected unknown method")
 		s.writeError(w, req.ID, -32601, "method not found")
 		return
 	}
 	fn, ok := s.tools[req.Params.Name]
 	if !ok {
-		s.writeError(w, req.ID, -32601, "unknown tool: "+req.Params.Name)
+		s.log.Warn().Str("tool", req.Params.Name).Msg("mcp: rejected unknown tool")
+		s.writeError(w, req.ID, -32602, "unknown tool: "+req.Params.Name)
 		return
 	}
 	out, err := fn(r.Context(), req.Params.Arguments)
@@ -97,14 +105,14 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	s.writeResult(w, req.ID, &toolResult{Content: []contentBlock{{Type: "text", Text: string(out)}}, IsError: false})
 }
 
-func (s *Server) writeResult(w http.ResponseWriter, id int, res *toolResult) {
+func (s *Server) writeResult(w http.ResponseWriter, id json.RawMessage, res *toolResult) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(rpcResponse{JSONRPC: "2.0", ID: id, Result: res}); err != nil {
 		s.log.Error().Err(err).Msg("encode result")
 	}
 }
 
-func (s *Server) writeError(w http.ResponseWriter, id, code int, msg string) {
+func (s *Server) writeError(w http.ResponseWriter, id json.RawMessage, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(rpcResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: msg}}); err != nil {
 		s.log.Error().Err(err).Msg("encode error")
