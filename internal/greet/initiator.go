@@ -84,7 +84,12 @@ func GreetPeer(
 			events.Emit(ctx, "mandate.acquire", events.StatusFail, map[string]string{"error": merr.Error()})
 			return "", nil, merr
 		}
-		events.Emit(ctx, "mandate.acquire", events.StatusOK, map[string]string{"authority": stringParam(ext.Params, "authorityRole", "authority")})
+		events.Emit(ctx, "mandate.acquire", events.StatusOK, map[string]string{
+			"authority": stringParam(ext.Params, "authorityRole", "authority"),
+			"scope":     stringParam(ext.Params, "scope", "greet"),
+			"audience":  audienceAns,
+			"tool":      "issue_mandate (MCP)",
+		})
 		opts = append(opts, a2a.WithMandate(mandate))
 	} else if _, ok := nonceExtension(card); ok {
 		events.Emit(ctx, "requirement", events.StatusInfo, map[string]string{"type": "nonce"})
@@ -93,7 +98,7 @@ func GreetPeer(
 			events.Emit(ctx, "dpop.build", events.StatusFail, map[string]string{"error": nerr.Error()})
 			return "", nil, nerr
 		}
-		events.Emit(ctx, "dpop.build", events.StatusOK, map[string]string{"htu": card.URL})
+		events.Emit(ctx, "dpop.build", events.StatusOK, map[string]string{"alg": "ES256", "htm": "POST", "htu": card.URL})
 		opts = append(opts, a2a.WithDPoP(proof))
 	} else if len(card.Security) != 0 {
 		return "", nil, fmt.Errorf("peer %q requires unsupported authentication", peer.Name)
@@ -192,7 +197,7 @@ func acquireDPoPProof(ctx context.Context, mcpCli *mcp.Client, peerBaseURL, htu 
 	if out.Nonce == "" {
 		return "", fmt.Errorf("greeter returned an empty nonce")
 	}
-	events.Emit(ctx, "nonce.get", events.StatusOK, nil)
+	events.Emit(ctx, "nonce.get", events.StatusOK, map[string]string{"nonce": out.Nonce, "tool": "get_nonce (MCP)", "use": "single-use"})
 	key, err := crypto.GenerateDPoPKey()
 	if err != nil {
 		return "", fmt.Errorf("generate dpop key: %w", err)

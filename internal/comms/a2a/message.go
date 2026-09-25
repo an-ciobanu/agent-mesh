@@ -169,7 +169,7 @@ func (g *GreetService) HandleMessageSend(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	thumb := crypto.Thumbprint(jwk)
-	events.Emit(ctx, "jws.verify", events.StatusOK, map[string]string{"thumbprint": thumb})
+	events.Emit(ctx, "jws.verify", events.StatusOK, map[string]string{"thumbprint": thumb, "alg": "EdDSA (Ed25519)", "result": "signature valid"})
 
 	var gp GreetPayload
 	if err := json.Unmarshal(payload, &gp); err != nil {
@@ -209,7 +209,7 @@ func (g *GreetService) HandleMessageSend(w http.ResponseWriter, r *http.Request)
 		g.writeError(w, req.ID, -32003, "greet not authorized: "+err.Error())
 		return
 	}
-	events.Emit(ctx, "gate", events.StatusOK, nil)
+	events.Emit(ctx, "gate", events.StatusOK, map[string]string{"decision": "accepted", "audience": gp.AudienceAns})
 
 	evidence := g.sealCtx(ctx, r, gp, thumb)
 
@@ -251,8 +251,10 @@ func (g *GreetService) sealCtx(ctx context.Context, r *http.Request, gp GreetPay
 		return nil
 	}
 	events.Emit(ctx, "seal", events.StatusOK, map[string]string{
+		"log":        "SCITT transparency",
 		"entryIndex": strconv.Itoa(receipt.EntryIndex),
 		"treeSize":   strconv.Itoa(receipt.TreeSize),
+		"root":       base64.StdEncoding.EncodeToString(receipt.Root),
 	})
 	g.log.Info().Int("entryIndex", receipt.EntryIndex).Int("treeSize", receipt.TreeSize).Msg("greet sealed")
 	return &domain.EvidenceBundle{Statement: statement, Receipt: receipt}

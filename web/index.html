@@ -103,7 +103,25 @@
   .raw .k { color: var(--muted); min-width: 130px; } .raw .v { color: var(--ink); word-break: break-all; }
   .reason { color: #ffd7d3; background: #2a1414; border: 1px solid #6b2b2b; border-radius: 7px;
     padding: 8px 12px; margin-top: 10px; font-size: 12.5px; }
-  .hintrow { color: var(--muted); font-size: 11px; margin: 2px 0 10px; }
+  .hintrow { color: var(--muted); font-size: 11px; margin: 2px 0 12px; }
+  /* linear step ledger */
+  .ledger { display: flex; flex-direction: column; }
+  .lstep { position: relative; padding: 10px 0 12px 20px; margin-left: 6px; border-left: 2px solid var(--edge); }
+  .lstep:last-child { border-left-color: transparent; }
+  .lstep::before { content: ''; position: absolute; left: -6px; top: 13px; width: 10px; height: 10px;
+    border-radius: 50%; background: var(--dot, #8b93a7); box-shadow: 0 0 0 3px var(--bg); }
+  .lstep.bad::before { background: var(--bad); }
+  .lhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .lhead .actor { font-weight: 600; }
+  .lhead .arw { color: var(--muted); }
+  .lhead .ltitle { color: var(--ink); }
+  .lstatus { margin-left: auto; font-size: 11px; }
+  .lstatus.ok { color: var(--ok); } .lstatus.bad { color: var(--bad); } .lstatus.info { color: var(--muted); }
+  .lexplain { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+  pre.ljson { margin: 7px 0 0; background: #0b1119; border: 1px solid var(--edge); border-radius: 7px;
+    padding: 8px 12px; font-size: 11.5px; line-height: 1.5; color: #cdd9e5;
+    white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
+  pre.ljson .jk { color: #6ea8fe; } pre.ljson .jv { color: #a5d6a7; }
 </style>
 </head>
 <body>
@@ -258,51 +276,57 @@ function updateLogEntry(it){
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-// --- build the drawer's sequence-diagram model from the real agent events ---
-function colorType(name){ const a = agents.find(x=>x.name===name); return a ? a.type : 'simple'; }
+// --- build the drawer's step ledger from the real agent events ---
+function agentColor(name){ const a = agents.find(x=>x.name===name); return a ? a.color : '#8b93a7'; }
+
+// Per-step human title + one-line explanation. `kind` is only used to decide
+// whether to show a "→ peer" (a network call) vs a local check.
+const STEP = {
+  'discover':        {title:'discover peer',                    explain:'find the target by role in the registry',                              kind:'note'},
+  'card.read':       {title:'read Agent Card',                  explain:'discovered how to call the peer and what it requires — nothing hardcoded', kind:'msg'},
+  'requirement':     {title:'requirement detected',             explain:'the card advertises what the caller must present',                       kind:'note'},
+  'nonce.get':       {title:'fetch nonce · MCP get_nonce',      explain:'greeter issues a fresh, single-use challenge',                           kind:'msg'},
+  'dpop.build':      {title:'build DPoP proof',                 explain:'caller signs a P-256/ES256 proof over the nonce, bound to this request', kind:'chk'},
+  'mandate.acquire': {title:'acquire mandate · MCP issue_mandate', explain:'caller obtains a COSE mandate from the discovered authority',          kind:'msg'},
+  'greet.send':      {title:'send greet · POST /a2a',           explain:'identity-signed greet, with the required proof attached',                kind:'msg'},
+  'jws.verify':      {title:'verify identity JWS',              explain:'greeter confirms the caller possesses its signing key',                  kind:'chk'},
+  'mandate.verify':  {title:'verify COSE mandate',              explain:'greeter checks the mandate signature',                                  kind:'chk'},
+  'authority.pin':   {title:'pin authority key',                explain:'greeter confirms the issuer is its one trusted authority (authenticates the issuer)', kind:'chk'},
+  'dpop.verify':     {title:'verify DPoP proof',                explain:'greeter checks the proof is bound to this exact request',               kind:'chk'},
+  'nonce.consume':   {title:'consume nonce',                    explain:'greeter spends the nonce so the proof cannot be replayed',               kind:'chk'},
+  'gate':            {title:'policy gate',                      explain:'the greeter\'s final accept / reject decision',                          kind:'chk'},
+  'seal':            {title:'seal to transparency log',         explain:'greeter seals a tamper-evident receipt into the SCITT log',              kind:'chk'},
+  'audit':           {title:'audit against the log',            explain:'caller independently verifies the sealed receipt\'s inclusion proof',    kind:'chk'},
+  'greet.reply':     {title:'reply received',                   explain:'greeter accepted and replied',                                          kind:'msg'},
+  'greet.rejected':  {title:'greet rejected',                   explain:'greeter refused the greet — fail closed',                               kind:'msg'},
+  'audience':        {title:'audience check',                   explain:'greet was not addressed to this greeter',                               kind:'chk'},
+};
+
 function modelFromEvents(it){
-  const isToken = it.type === 'mandate' || it.type === 'token';
-  const authEv = it.events.find(e => e.step==='mandate.acquire');
-  const authName = (authEv && authEv.detail && authEv.detail.authority) || 'authority';
-  const lanes = isToken
-    ? [{name:it.from,role:colorType(it.from),sub:'initiator'},{name:authName,role:'authority',sub:'authority'},{name:it.to,role:colorType(it.to),sub:'greeter · token'}]
-    : [{name:it.from,role:colorType(it.from),sub:'initiator'},{name:it.to,role:colorType(it.to),sub:'greeter'}];
-  const R = isToken ? 2 : 1;
-  const steps = [];
-  for (const e of it.events){
-    const raw = e.detail || {};
-    switch (e.step){
-      case 'card.read':      steps.push({t:'msg', from:0, to:R, label:'GET agent-card', head:'►', raw}); break;
-      case 'mandate.acquire':
-        steps.push({t:'msg', from:0, to:1, label:'POST /mcp issue_mandate', head:'►', raw});
-        if (e.status==='ok') steps.push({t:'msg', from:1, to:0, cls:'res', label:'COSE token', head:'◄', raw});
-        break;
-      case 'nonce.get':      steps.push({t:'msg', from:0, to:R, label:'MCP get_nonce → nonce', head:'►', raw}); break;
-      case 'dpop.build':     steps.push({t:'chk', lane:0, status:e.status, label:'build DPoP proof', raw}); break;
-      case 'greet.send':     steps.push({t:'msg', from:0, to:R, label:'POST /a2a greet + JWS', head:'►', raw}); break;
-      case 'jws.verify':     steps.push({t:'chk', lane:R, status:e.status, label:'verify identity JWS', raw}); break;
-      case 'mandate.verify': steps.push({t:'chk', lane:R, status:e.status, label:'verify COSE mandate', raw}); break;
-      case 'authority.pin':  steps.push({t:'chk', lane:R, status:e.status, label:'pin authority key', raw}); break;
-      case 'dpop.verify':    steps.push({t:'chk', lane:R, status:e.status, label:'verify DPoP proof', raw}); break;
-      case 'nonce.consume':  steps.push({t:'chk', lane:R, status:e.status, label:'consume nonce (single-use)', raw}); break;
-      case 'gate':           steps.push({t:'chk', lane:R, status:e.status, label:'gate', raw}); break;
-      case 'seal':           steps.push({t:'chk', lane:R, status:e.status, label:'seal → receipt #'+(raw.entryIndex!=null?raw.entryIndex:'?'), raw}); break;
-      case 'audit':          steps.push({t:'chk', lane:0, status:e.status, label:'audit vs TL: '+(raw.verdict||raw.note||''), raw}); break;
-      case 'greet.reply':    steps.push({t:'msg', from:R, to:0, cls:'ok', label:'200 · reply', head:'◄', raw}); break;
+  const steps = it.events.map(e => {
+    const meta = STEP[e.step] || {title:e.step, explain:'', kind:'chk'};
+    const actor = e.role === 'initiator' ? it.from : it.to;
+    let peer = null;
+    if (meta.kind === 'msg') {
+      if (e.step === 'mandate.acquire') peer = (e.detail && e.detail.authority) || 'authority';
+      else peer = (actor === it.from) ? it.to : it.from;
     }
-  }
-  const deduped = steps.filter((s,i)=> i===0 || !(s.t===steps[i-1].t && s.label===steps[i-1].label && s.status===steps[i-1].status && s.lane===steps[i-1].lane));
+    return { actor, color: agentColor(actor), peer, title: meta.title, explain: meta.explain,
+             kind: meta.kind, status: e.status, detail: e.detail || {} };
+  });
   return { from:it.from, to:it.to, type:it.type, time:new Date().toLocaleTimeString([],{hour12:false}),
-           accepted: it.verdict==='accepted', reason: it.reason, lanes, steps: deduped };
+           accepted: it.verdict==='accepted', reason: it.reason, steps };
 }
 
-// --- detail drawer rendering ---
+// --- detail drawer rendering (linear step ledger) ---
 const drawer = document.getElementById('drawer'), dbody = document.getElementById('dbody');
 const dTitle = document.getElementById('dTitle'), dVerdict = document.getElementById('dVerdict'), dTime = document.getElementById('dTime');
-const laneCenter = (i,n) => ((i+0.5)/n*100);
 
-function rawHTML(raw){
-  return '<div class="raw">'+Object.entries(raw).map(([k,v])=>`<div><span class="k">${k}</span><span class="v">${v}</span></div>`).join('')+'</div>';
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function jsonHTML(obj){
+  const s = esc(JSON.stringify(obj, null, 2)); // esc leaves " intact (only &,<,> escaped)
+  return s.replace(/"([^"]+)":/g, '<span class="jk">"$1"</span>:')
+          .replace(/: ("(?:[^"\\]|\\.)*")/g, ': <span class="jv">$1</span>');
 }
 
 function setActiveRow(greetId){
@@ -310,57 +334,32 @@ function setActiveRow(greetId){
   const el = logRows[greetId]; if (el) el.classList.add('active');
 }
 
-// Render one sequence-diagram model into the drawer body. Data comes from
-// modelFromEvents(); the lane/row/arrow/expandable-raw markup is unchanged.
+// Render the step ledger. Each step is a full card: actor (colored) [→ peer],
+// human title, status, one-line explanation, and the real JSON artifact.
 function renderDrawer(d){
-  const n = d.lanes.length;
   dTitle.innerHTML = `${d.from} → ${d.to} <span style="color:${COL[uiType(d.type)]||'var(--muted)'}">· ${LABEL[uiType(d.type)]||d.type||''}</span>`;
   dVerdict.textContent = d.accepted ? 'ACCEPTED' : 'REJECTED';
   dVerdict.style.color = d.accepted ? 'var(--ok)' : 'var(--bad)';
   dTime.textContent = d.time;
 
-  const cols = `grid-template-columns:repeat(${n},1fr)`;
-  let html = `<div class="hintrow">real HTTP + MCP calls between the agents · click any step to reveal the artifact behind it</div>`;
-  html += `<div class="seq">`;
-  html += `<div class="lanehead" style="${cols}">`+ d.lanes.map(l=>`<div class="ln" style="color:${COL[l.role]||'var(--muted)'}">${l.name}<small>${l.sub}</small></div>`).join('') +`</div>`;
-  html += `<div class="lifelines" id="llWrap">`+ d.lanes.map((_,i)=>`<div class="lifeline" style="left:${laneCenter(i,n)}%"></div>`).join('') +`</div>`;
-  html += `<div class="rows">`;
-  d.steps.forEach((s,si)=>{
-    if (s.t==='msg'){
-      const lo=Math.min(s.from,s.to), hi=Math.max(s.from,s.to);
-      const left=laneCenter(lo,n), right=laneCenter(hi,n), width=right-left;
-      const fwd = s.to>s.from;
-      html += `<div class="srow" data-si="${si}">
-        <div class="msg ${s.cls||''}" style="left:${left}%;width:${width}%">
-          <span class="head">${fwd?'':'◄'}</span>
-          <div class="msgline"><span class="lbl">${s.label}</span></div>
-          <span class="head">${fwd?'►':''}</span>
-        </div></div>`;
-    } else { // check annotation on one lane
-      const left=laneCenter(s.lane,n);
-      const mark = s.status==='ok'?'<b>✓</b>':'<b>✗</b>';
-      html += `<div class="srow" data-si="${si}">
-        <div class="chk ${s.status==='ok'?'ok':'bad'}" style="left:${left}%">${s.label} ${mark}</div></div>`;
-    }
-  });
-  html += `</div></div>`;
-  if (!d.accepted && d.reason) html += `<div class="reason">✗ fail closed — ${d.reason}</div>`;
+  let html = `<div class="hintrow">every real step, from each agent's point of view · the JSON is the actual artifact behind it</div><div class="ledger">`;
+  for (const s of d.steps){
+    const badge = s.status==='ok'
+        ? '<span class="lstatus ok">✓ ok</span>'
+        : s.status==='fail'
+        ? '<span class="lstatus bad">✗ fail</span>'
+        : '<span class="lstatus info">· info</span>';
+    const arrow = s.peer ? ` <span class="arw">→ ${esc(s.peer)}</span>` : '';
+    const json = Object.keys(s.detail).length ? `<pre class="ljson">${jsonHTML(s.detail)}</pre>` : '';
+    html += `<div class="lstep${s.status==='fail'?' bad':''}" style="--dot:${s.color}">
+      <div class="lhead"><span class="actor" style="color:${s.color}">${esc(s.actor)}</span>${arrow}<span class="ltitle">· ${esc(s.title)}</span>${badge}</div>
+      ${s.explain ? `<div class="lexplain">${esc(s.explain)}</div>` : ''}
+      ${json}
+    </div>`;
+  }
+  html += `</div>`;
+  if (!d.accepted && d.reason) html += `<div class="reason">✗ fail closed — ${esc(d.reason)}</div>`;
   dbody.innerHTML = html;
-
-  // size lifelines to the rows block; wire expand
-  const rowsEl = dbody.querySelector('.rows'), llWrap = dbody.querySelector('#llWrap');
-  const fitLifelines = ()=>{ if (llWrap && rowsEl){ llWrap.style.top = rowsEl.offsetTop+'px'; llWrap.style.height = rowsEl.offsetHeight+'px'; } };
-  fitLifelines();
-  dbody.querySelectorAll('.srow').forEach(row=>{
-    row.addEventListener('click', ()=>{
-      const s = d.steps[+row.dataset.si];
-      const existing = row.nextElementSibling;
-      if (existing && existing.classList.contains('rawwrap')){ existing.remove(); fitLifelines(); return; }
-      if (!s.raw) return;
-      const w = document.createElement('div'); w.className='rawwrap'; w.innerHTML = rawHTML(s.raw);
-      row.after(w); fitLifelines();
-    });
-  });
 }
 
 function openDrawer(greetId){

@@ -58,12 +58,12 @@ func (m *Mandate) Authorize(ctx context.Context, req domain.GreetRequest) error 
 		events.Emit(ctx, "mandate.verify", events.StatusFail, map[string]string{"error": err.Error()})
 		return fmt.Errorf("mandate signature invalid: %w", err)
 	}
-	events.Emit(ctx, "mandate.verify", events.StatusOK, nil)
+	events.Emit(ctx, "mandate.verify", events.StatusOK, map[string]string{"alg": "EdDSA", "result": "COSE_Sign1 signature valid (self-verifying)"})
 	if !signer.Equal(m.authorityPub) {
 		events.Emit(ctx, "authority.pin", events.StatusFail, map[string]string{"authority": m.authorityAns})
 		return fmt.Errorf("mandate not signed by the trusted authority")
 	}
-	events.Emit(ctx, "authority.pin", events.StatusOK, map[string]string{"authority": m.authorityAns})
+	events.Emit(ctx, "authority.pin", events.StatusOK, map[string]string{"authority": m.authorityAns, "result": "issuer key matches the pinned authority — issuer authenticated"})
 	var claims domain.MandateClaims
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return fmt.Errorf("mandate claims malformed: %w", err)

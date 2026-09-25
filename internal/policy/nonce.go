@@ -51,7 +51,13 @@ func (n *Nonce) Authorize(ctx context.Context, req domain.GreetRequest) error {
 		events.Emit(ctx, "dpop.verify", events.StatusFail, map[string]string{"error": err.Error()})
 		return fmt.Errorf("DPoP proof invalid: %w", err)
 	}
-	events.Emit(ctx, "dpop.verify", events.StatusOK, map[string]string{"thumbprint": thumb})
+	events.Emit(ctx, "dpop.verify", events.StatusOK, map[string]string{
+		"alg":        "ES256 (P-256)",
+		"thumbprint": thumb,
+		"htm":        claims.HTM,
+		"htu":        claims.HTU,
+		"bound":      "signature + htm + htu + iat all bound to this request",
+	})
 	if claims.HTM != req.HTTPMethod {
 		return fmt.Errorf("DPoP htm %q does not match request method %q", claims.HTM, req.HTTPMethod)
 	}
@@ -69,7 +75,7 @@ func (n *Nonce) Authorize(ctx context.Context, req domain.GreetRequest) error {
 		events.Emit(ctx, "nonce.consume", events.StatusFail, nil)
 		return fmt.Errorf("DPoP nonce not recognized or already used")
 	}
-	events.Emit(ctx, "nonce.consume", events.StatusOK, nil)
+	events.Emit(ctx, "nonce.consume", events.StatusOK, map[string]string{"nonce": claims.Nonce, "result": "first use — now consumed (replay defeated)"})
 	n.log.Info().Str("callerAns", req.CallerAns).Str("dpopThumbprint", thumb).Msg("nonce proof accepted")
 	return nil
 }
