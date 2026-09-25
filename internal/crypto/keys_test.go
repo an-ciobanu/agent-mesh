@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"crypto/ed25519"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -36,5 +37,16 @@ func TestLoadOrCreateEd25519Persists(t *testing.T) {
 	}
 	if !k1.Equal(k2) {
 		t.Fatal("expected the same key when reloading from disk")
+	}
+}
+
+func TestLoadOrCreateEd25519RejectsWrongLengthSeed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "id_ed25519.seed")
+	if err := os.WriteFile(path, make([]byte, 10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadOrCreateEd25519(path); err == nil {
+		t.Fatal("expected an error for a wrong-length seed file, got nil")
 	}
 }
