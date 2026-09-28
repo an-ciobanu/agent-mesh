@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,6 +59,15 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	regURL := "http://" + s.registry
 	tlURL := "http://" + s.transparency
 
+	// Fail loudly if any port we are about to bind is already taken — otherwise an
+	// orphaned process from a previous run (e.g. a pre-upgrade transparency log)
+	// keeps serving on the port, our own child fails to bind and exits, the
+	// readiness probe passes against the stale process, and the mesh silently runs
+	// against it (producing, for instance, receipts the newer auditor rejects).
+	if err := s.preflightPorts(); err != nil {
+		return err
+	}
+
 	if err := s.spawn(ctx, "registry", nil, s.bin+"/registry", "--addr", s.registry); err != nil {
 		return err
 	}
@@ -70,9 +81,11 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	}
 	// internal/tl/service.go registers "GET /pubkey" (returns 200 as soon as the
 	// service's Ed25519 key is loaded; unlike /checkpoint it has no dependency on
-	// log state).
+	// log state). The transparency log is essential — greets, purchases, and
+	// mandate issuance seal into it and callers audit against it — so a readiness
+	// failure is fatal, not a warning.
 	if err := waitReady(ctx, tlURL+"/pubkey", 5*time.Second); err != nil {
-		s.log.Warn().Err(err).Msg("transparency readiness probe failed; continuing")
+		return fmt.Errorf("transparency not ready: %w", err)
 	}
 	for _, a := range s.roster.Agents {
 		if a.Policy != "authority" {
@@ -133,10 +146,46 @@ func (s *Supervisor) greeterArgs(a Agent) []string {
 // SpawnOne starts a single greeter at runtime, streaming its events into the hub,
 // and waits briefly for it to become ready. Used by POST /spawn.
 func (s *Supervisor) SpawnOne(a Agent) error {
+	if !portFree(a.Addr) {
+		return fmt.Errorf("cannot spawn %s: port %s already in use (stale process?)", a.Name, a.Addr)
+	}
 	if err := s.spawn(s.ctx, a.Name, s.hub, s.bin+"/agent", s.greeterArgs(a)...); err != nil {
 		return err
 	}
 	return waitReady(s.ctx, a.BaseURL()+"/.well-known/agent-card.json", 8*time.Second)
+}
+
+// portFree reports whether addr (host:port) can be bound right now. It is a
+// best-effort check: a caller may still lose a race to another process, but it
+// reliably catches an orphan already listening on the port.
+func portFree(addr string) bool {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return false
+	}
+	_ = ln.Close()
+	return true
+}
+
+// preflightPorts returns an error naming every port the mesh is about to bind
+// (registry, transparency, and each rostered authority/greeter) that is already
+// in use, so a stale process surfaces immediately instead of as silent misbehavior.
+func (s *Supervisor) preflightPorts() error {
+	type binding struct{ name, addr string }
+	bindings := []binding{{"registry", s.registry}, {"transparency", s.transparency}}
+	for _, a := range s.roster.Agents {
+		bindings = append(bindings, binding{a.Name, a.Addr})
+	}
+	var busy []string
+	for _, b := range bindings {
+		if !portFree(b.addr) {
+			busy = append(busy, b.addr+" ("+b.name+")")
+		}
+	}
+	if len(busy) > 0 {
+		return fmt.Errorf("ports already in use — a previous mesh may still be running; stop it and retry: %s", strings.Join(busy, ", "))
+	}
+	return nil
 }
 
 // Kill terminates a single agent by name (used by POST /despawn).
