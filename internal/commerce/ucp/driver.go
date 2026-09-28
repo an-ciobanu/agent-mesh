@@ -120,7 +120,7 @@ func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco 
 	events.Emit(ctx, "authority.resolve", events.StatusOK, map[string]string{"authority": auth.Name, "role": prof.AP2.AuthorityRole})
 
 	events.Emit(ctx, "checkout.request", events.StatusInfo, map[string]string{"authority": auth.Name, "tool": "issue_checkout_mandate", "endpoint": auth.BaseURL + "/mcp"})
-	cm, err := acquireMandate(ctx, mcpCli, auth.BaseURL+"/mcp", "issue_checkout_mandate", map[string]any{
+	cm, cmEv, err := acquireMandate(ctx, mcpCli, auth.BaseURL+"/mcp", "issue_checkout_mandate", map[string]any{
 		"subjectAns": callerAns, "audienceAns": audienceAns, "checkoutId": sess.CheckoutID, "itemId": item.ID, "amount": amount, "currency": currency,
 	})
 	if err != nil {
@@ -130,7 +130,7 @@ func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco 
 	events.Emit(ctx, "checkout.acquire", events.StatusOK, map[string]string{"authority": auth.Name, "tool": "issue_checkout_mandate (MCP)"})
 
 	events.Emit(ctx, "payment.request", events.StatusInfo, map[string]string{"authority": auth.Name, "tool": "issue_payment_mandate", "endpoint": auth.BaseURL + "/mcp"})
-	pm, err := acquireMandate(ctx, mcpCli, auth.BaseURL+"/mcp", "issue_payment_mandate", map[string]any{
+	pm, pmEv, err := acquireMandate(ctx, mcpCli, auth.BaseURL+"/mcp", "issue_payment_mandate", map[string]any{
 		"subjectAns": callerAns, "audienceAns": audienceAns, "amount": amount, "currency": currency,
 	})
 	if err != nil {
@@ -138,6 +138,13 @@ func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco 
 		return commerce.BuyResult{}, err
 	}
 	events.Emit(ctx, "payment.acquire", events.StatusOK, map[string]string{"authority": auth.Name, "tool": "issue_payment_mandate (MCP)"})
+	var mandateEvidence []domain.EvidenceBundle
+	if cmEv != nil {
+		mandateEvidence = append(mandateEvidence, *cmEv)
+	}
+	if pmEv != nil {
+		mandateEvidence = append(mandateEvidence, *pmEv)
+	}
 
 	// tokenize via the handler
 	var tok struct {
@@ -158,9 +165,10 @@ func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco 
 	// complete
 	events.Emit(ctx, "checkout.complete", events.StatusInfo, map[string]string{"checkoutId": sess.CheckoutID})
 	var rec struct {
-		Provider   string `json:"provider"`
-		PaymentRef string `json:"paymentRef"`
-		Status     string `json:"status"`
+		Provider   string                 `json:"provider"`
+		PaymentRef string                 `json:"paymentRef"`
+		Status     string                 `json:"status"`
+		Evidence   *domain.EvidenceBundle `json:"evidence"`
 	}
 	if err := postJSONExpect(ctx, httpc, greetID, peer.BaseURL+prof.Checkout.SessionsPath+"/"+sess.CheckoutID+"/complete", map[string]any{
 		"callerAns": callerAns, "checkoutMandate": cm, "paymentMandate": pm, "paymentToken": tok.Token,
@@ -169,7 +177,10 @@ func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco 
 		return commerce.BuyResult{}, err
 	}
 	events.Emit(ctx, "receipt", events.StatusOK, map[string]string{"paymentRef": rec.PaymentRef, "status": rec.Status, "provider": rec.Provider})
-	return commerce.BuyResult{PaymentRef: rec.PaymentRef, Status: rec.Status, ItemID: item.ID}, nil
+	return commerce.BuyResult{
+		PaymentRef: rec.PaymentRef, Status: rec.Status, ItemID: item.ID,
+		PurchaseEvidence: rec.Evidence, MandateEvidence: mandateEvidence,
+	}, nil
 }
 
 func ucpExtension(card a2a.Card) (a2a.Extension, bool) {
@@ -224,21 +235,22 @@ func pickAuthority(ctx context.Context, disco domain.Discovery, role, wantAns st
 	return domain.AgentInfo{}, false, nil
 }
 
-func acquireMandate(ctx context.Context, mcpCli *mcp.Client, authURL, tool string, args map[string]any) ([]byte, error) {
+func acquireMandate(ctx context.Context, mcpCli *mcp.Client, authURL, tool string, args map[string]any) ([]byte, *domain.EvidenceBundle, error) {
 	raw, err := mcpCli.Call(ctx, authURL, tool, args)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", tool, err)
+		return nil, nil, fmt.Errorf("%s: %w", tool, err)
 	}
 	var out struct {
-		MandateCOSE []byte `json:"mandateCose"`
+		MandateCOSE []byte                 `json:"mandateCose"`
+		Evidence    *domain.EvidenceBundle `json:"evidence"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", tool, err)
+		return nil, nil, fmt.Errorf("parse %s: %w", tool, err)
 	}
 	if len(out.MandateCOSE) == 0 {
-		return nil, fmt.Errorf("authority returned an empty mandate from %s", tool)
+		return nil, nil, fmt.Errorf("authority returned an empty mandate from %s", tool)
 	}
-	return out.MandateCOSE, nil
+	return out.MandateCOSE, out.Evidence, nil
 }
 
 func getJSON(ctx context.Context, httpc *http.Client, greetID, url string, out any) error {

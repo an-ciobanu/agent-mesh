@@ -22,6 +22,7 @@ type Authority struct {
 	ans  string
 	priv ed25519.PrivateKey
 	ttl  time.Duration
+	tl   domain.Transparency // optional; when set, each issued mandate is sealed
 	log  zerolog.Logger
 }
 
@@ -29,6 +30,31 @@ type Authority struct {
 // ttl must be > 0; a non-positive ttl produces immediately-expired mandates.
 func New(ans string, priv ed25519.PrivateKey, ttl time.Duration, log zerolog.Logger) *Authority {
 	return &Authority{ans: ans, priv: priv, ttl: ttl, log: log.With().Str("component", "authority").Logger()}
+}
+
+// WithTransparency makes the authority seal every issued mandate into tl and
+// return the inclusion evidence to the caller, so a peer can independently check
+// that the authority actually logged the issuance. Returns the authority for
+// chaining. Passing nil leaves sealing disabled.
+func (a *Authority) WithTransparency(tl domain.Transparency) *Authority {
+	a.tl = tl
+	return a
+}
+
+// sealIssued seals a signed mandate into the transparency log and returns the
+// evidence bundle, or nil when sealing is disabled or fails (best-effort: an
+// issuance is never blocked by a logging failure).
+func (a *Authority) sealIssued(ctx context.Context, cose []byte) *domain.EvidenceBundle {
+	if a.tl == nil {
+		return nil
+	}
+	receipt, err := a.tl.Seal(ctx, cose)
+	if err != nil {
+		a.log.Warn().Err(err).Msg("seal mandate issuance failed")
+		return nil
+	}
+	a.log.Info().Str("logId", receipt.LogID).Int("entryIndex", receipt.EntryIndex).Msg("mandate issuance sealed")
+	return &domain.EvidenceBundle{Statement: cose, Receipt: receipt}
 }
 
 // IssueMandate builds a mandate authorizing subject->audience for scope and
@@ -107,7 +133,7 @@ type spendArgs struct {
 
 // SpendMCPTool returns the issue_spend_mandate MCP tool handler.
 func (a *Authority) SpendMCPTool() mcp.ToolFunc {
-	return func(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
+	return func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
 		var in spendArgs
 		if err := json.Unmarshal(args, &in); err != nil {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
@@ -116,7 +142,7 @@ func (a *Authority) SpendMCPTool() mcp.ToolFunc {
 		if err != nil {
 			return nil, err
 		}
-		return json.Marshal(issueResult{MandateCOSE: cose})
+		return json.Marshal(issueResult{MandateCOSE: cose, Evidence: a.sealIssued(ctx, cose)})
 	}
 }
 
@@ -127,12 +153,13 @@ type issueArgs struct {
 }
 
 type issueResult struct {
-	MandateCOSE []byte `json:"mandateCose"` // JSON-encodes as base64
+	MandateCOSE []byte                 `json:"mandateCose"`        // JSON-encodes as base64
+	Evidence    *domain.EvidenceBundle `json:"evidence,omitempty"` // inclusion proof of the issuance (when sealing is enabled)
 }
 
 // MCPTool returns the issue_mandate MCP tool handler.
 func (a *Authority) MCPTool() mcp.ToolFunc {
-	return func(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
+	return func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
 		var in issueArgs
 		if err := json.Unmarshal(args, &in); err != nil {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
@@ -141,7 +168,7 @@ func (a *Authority) MCPTool() mcp.ToolFunc {
 		if err != nil {
 			return nil, err
 		}
-		return json.Marshal(issueResult{MandateCOSE: cose})
+		return json.Marshal(issueResult{MandateCOSE: cose, Evidence: a.sealIssued(ctx, cose)})
 	}
 }
 
@@ -218,7 +245,7 @@ type paymentMandateArgs struct {
 
 // CheckoutMandateMCPTool returns the issue_checkout_mandate MCP tool.
 func (a *Authority) CheckoutMandateMCPTool() mcp.ToolFunc {
-	return func(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
+	return func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
 		var in checkoutMandateArgs
 		if err := json.Unmarshal(args, &in); err != nil {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
@@ -227,13 +254,13 @@ func (a *Authority) CheckoutMandateMCPTool() mcp.ToolFunc {
 		if err != nil {
 			return nil, err
 		}
-		return json.Marshal(issueResult{MandateCOSE: cose})
+		return json.Marshal(issueResult{MandateCOSE: cose, Evidence: a.sealIssued(ctx, cose)})
 	}
 }
 
 // PaymentMandateMCPTool returns the issue_payment_mandate MCP tool.
 func (a *Authority) PaymentMandateMCPTool() mcp.ToolFunc {
-	return func(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
+	return func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
 		var in paymentMandateArgs
 		if err := json.Unmarshal(args, &in); err != nil {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
@@ -242,7 +269,7 @@ func (a *Authority) PaymentMandateMCPTool() mcp.ToolFunc {
 		if err != nil {
 			return nil, err
 		}
-		return json.Marshal(issueResult{MandateCOSE: cose})
+		return json.Marshal(issueResult{MandateCOSE: cose, Evidence: a.sealIssued(ctx, cose)})
 	}
 }
 

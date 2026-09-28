@@ -5,11 +5,12 @@ import "context"
 // Receipt is a transparency-log inclusion receipt for a submitted statement.
 // Root and Proof JSON-encode as base64 (Go's default for []byte).
 type Receipt struct {
+	LogID      string   `json:"logId"` // identity of the issuing log (its public-key thumbprint)
 	EntryIndex int      `json:"entryIndex"`
 	TreeSize   int      `json:"treeSize"`
 	Root       []byte   `json:"root"`
 	Proof      [][]byte `json:"proof"`
-	COSE       []byte   `json:"cose"` // TL-signed COSE_Sign1 over {entryIndex, treeSize, root}
+	COSE       []byte   `json:"cose"` // TL-signed COSE_Sign1 over {logId, entryIndex, treeSize, root}
 }
 
 // Transparency seals a signed statement into an append-only transparency log and

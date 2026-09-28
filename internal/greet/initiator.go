@@ -34,18 +34,18 @@ func Initiate(
 	mcpCli *mcp.Client,
 	priv ed25519.PrivateKey,
 	callerAns, toRole, greeting string,
-) (string, *domain.EvidenceBundle, domain.AgentInfo, error) {
+) (string, *domain.EvidenceBundle, []domain.EvidenceBundle, domain.AgentInfo, error) {
 	events.Emit(ctx, "discover", events.StatusInfo, map[string]string{"role": toRole})
 	peers, err := disco.Search(ctx, toRole)
 	if err != nil {
-		return "", nil, domain.AgentInfo{}, fmt.Errorf("discover role %q: %w", toRole, err)
+		return "", nil, nil, domain.AgentInfo{}, fmt.Errorf("discover role %q: %w", toRole, err)
 	}
 	if len(peers) == 0 {
-		return "", nil, domain.AgentInfo{}, fmt.Errorf("no agents found for role %q", toRole)
+		return "", nil, nil, domain.AgentInfo{}, fmt.Errorf("no agents found for role %q", toRole)
 	}
 	peer := peers[0]
-	reply, evidence, err := GreetPeer(ctx, res, cli, mcpCli, disco, priv, callerAns, peer, greeting)
-	return reply, evidence, peer, err
+	reply, evidence, mandateEv, err := GreetPeer(ctx, res, cli, mcpCli, disco, priv, callerAns, peer, greeting)
+	return reply, evidence, mandateEv, peer, err
 }
 
 // GreetPeer greets a specific, already-discovered peer: read its card, satisfy
@@ -63,26 +63,27 @@ func GreetPeer(
 	callerAns string,
 	peer domain.AgentInfo,
 	greeting string,
-) (string, *domain.EvidenceBundle, error) {
+) (string, *domain.EvidenceBundle, []domain.EvidenceBundle, error) {
 	card, err := res.FetchCard(ctx, peer.CardURL)
 	if err != nil {
-		return "", nil, fmt.Errorf("resolve peer card: %w", err)
+		return "", nil, nil, fmt.Errorf("resolve peer card: %w", err)
 	}
 	events.Emit(ctx, "card.read", events.StatusOK, map[string]string{"peer": peer.Name, "url": card.URL})
 
 	audienceAns := domain.LocalANSName(peer.Name)
 	greetID := events.GreetIDFromContext(ctx)
 	opts := []a2a.SendOption{a2a.WithGreetID(greetID)}
+	var mandateEv []domain.EvidenceBundle
 
 	if ext, ok := mandateExtension(card); ok {
 		events.Emit(ctx, "requirement", events.StatusInfo, map[string]string{"type": "mandate"})
 		if disco == nil {
-			return "", nil, fmt.Errorf("peer %q requires a mandate but no discovery is available", peer.Name)
+			return "", nil, nil, fmt.Errorf("peer %q requires a mandate but no discovery is available", peer.Name)
 		}
-		mandate, authName, merr := acquireMandate(ctx, disco, mcpCli, ext, callerAns, audienceAns)
+		mandate, authName, ev, merr := acquireMandate(ctx, disco, mcpCli, ext, callerAns, audienceAns)
 		if merr != nil {
 			events.Emit(ctx, "mandate.acquire", events.StatusFail, map[string]string{"error": merr.Error(), "authority": authName})
-			return "", nil, merr
+			return "", nil, nil, merr
 		}
 		events.Emit(ctx, "mandate.acquire", events.StatusOK, map[string]string{
 			"authority": authName,
@@ -90,18 +91,21 @@ func GreetPeer(
 			"audience":  audienceAns,
 			"tool":      "issue_mandate (MCP)",
 		})
+		if ev != nil {
+			mandateEv = append(mandateEv, *ev)
+		}
 		opts = append(opts, a2a.WithMandate(mandate))
 	} else if _, ok := nonceExtension(card); ok {
 		events.Emit(ctx, "requirement", events.StatusInfo, map[string]string{"type": "nonce"})
 		proof, nerr := acquireDPoPProof(ctx, mcpCli, peer.BaseURL, card.URL)
 		if nerr != nil {
 			events.Emit(ctx, "dpop.build", events.StatusFail, map[string]string{"error": nerr.Error()})
-			return "", nil, nerr
+			return "", nil, nil, nerr
 		}
 		events.Emit(ctx, "dpop.build", events.StatusOK, map[string]string{"alg": "ES256", "htm": "POST", "htu": card.URL})
 		opts = append(opts, a2a.WithDPoP(proof))
 	} else if len(card.Security) != 0 {
-		return "", nil, fmt.Errorf("peer %q requires unsupported authentication", peer.Name)
+		return "", nil, nil, fmt.Errorf("peer %q requires unsupported authentication", peer.Name)
 	} else {
 		events.Emit(ctx, "requirement", events.StatusInfo, map[string]string{"type": "open"})
 	}
@@ -114,10 +118,10 @@ func GreetPeer(
 	}, opts...)
 	if err != nil {
 		events.Emit(ctx, "greet.rejected", events.StatusFail, map[string]string{"error": err.Error()})
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	events.Emit(ctx, "greet.reply", events.StatusOK, map[string]string{"reply": reply})
-	return reply, evidence, nil
+	return reply, evidence, mandateEv, nil
 }
 
 // mandateExtension returns the mandate-required extension if the card advertises it.
@@ -154,20 +158,21 @@ func selectAuthority(peers []domain.AgentInfo, authorityAns string) (domain.Agen
 
 // acquireMandate discovers the authority named by the extension and obtains a
 // mandate for callerAns->audienceAns via the authority's issue_mandate MCP tool.
-// It returns the chosen authority's name alongside the mandate so callers can
-// report which authority was actually used.
-func acquireMandate(ctx context.Context, disco domain.Discovery, mcpCli *mcp.Client, ext a2a.Extension, callerAns, audienceAns string) ([]byte, string, error) {
+// It returns the chosen authority's name and the authority-sealed issuance
+// evidence (nil if the authority did not seal) alongside the mandate so callers
+// can report which authority was used and audit that the issuance was logged.
+func acquireMandate(ctx context.Context, disco domain.Discovery, mcpCli *mcp.Client, ext a2a.Extension, callerAns, audienceAns string) ([]byte, string, *domain.EvidenceBundle, error) {
 	authorityRole := stringParam(ext.Params, "authorityRole", "authority")
 	authorityAns := stringParam(ext.Params, "authorityAns", "")
 	scope := stringParam(ext.Params, "scope", "greet")
 
 	authorities, err := disco.Search(ctx, authorityRole)
 	if err != nil {
-		return nil, "", fmt.Errorf("discover authority role %q: %w", authorityRole, err)
+		return nil, "", nil, fmt.Errorf("discover authority role %q: %w", authorityRole, err)
 	}
 	authority, ok := selectAuthority(authorities, authorityAns)
 	if !ok {
-		return nil, "", fmt.Errorf("no authority %q found under role %q", authorityAns, authorityRole)
+		return nil, "", nil, fmt.Errorf("no authority %q found under role %q", authorityAns, authorityRole)
 	}
 	authURL := authority.BaseURL + "/mcp"
 
@@ -180,18 +185,19 @@ func acquireMandate(ctx context.Context, disco domain.Discovery, mcpCli *mcp.Cli
 		"scope":       scope,
 	})
 	if err != nil {
-		return nil, authority.Name, fmt.Errorf("issue_mandate: %w", err)
+		return nil, authority.Name, nil, fmt.Errorf("issue_mandate: %w", err)
 	}
 	var out struct {
-		MandateCOSE []byte `json:"mandateCose"`
+		MandateCOSE []byte                 `json:"mandateCose"`
+		Evidence    *domain.EvidenceBundle `json:"evidence"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, authority.Name, fmt.Errorf("parse issue_mandate result: %w", err)
+		return nil, authority.Name, nil, fmt.Errorf("parse issue_mandate result: %w", err)
 	}
 	if len(out.MandateCOSE) == 0 {
-		return nil, authority.Name, fmt.Errorf("authority returned an empty mandate")
+		return nil, authority.Name, nil, fmt.Errorf("authority returned an empty mandate")
 	}
-	return out.MandateCOSE, authority.Name, nil
+	return out.MandateCOSE, authority.Name, out.Evidence, nil
 }
 
 // nonceExtension returns the DPoP-nonce extension if the card advertises it.

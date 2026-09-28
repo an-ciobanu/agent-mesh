@@ -21,6 +21,7 @@ import (
 	"github.com/an-ciobanu/agent-mesh/internal/comms/a2a"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/discovery"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/mcp"
+	"github.com/an-ciobanu/agent-mesh/internal/comms/transparency"
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
 )
@@ -31,6 +32,7 @@ func main() {
 	registryURL := flag.String("registry", "http://127.0.0.1:18090", "registry base URL")
 	keyDir := flag.String("keys", "", "identity key directory (default: ./data/<name>)")
 	ttl := flag.Duration("ttl", time.Hour, "mandate validity window")
+	transparencyURL := flag.String("transparency", "", "transparency log base URL; enables sealing of issued mandates")
 	flag.Parse()
 
 	log := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Str("agent", *name).Logger()
@@ -49,6 +51,10 @@ func main() {
 	}
 	selfAns := domain.LocalANSName(*name)
 	auth := authority.New(selfAns, priv, *ttl, log)
+	if *transparencyURL != "" {
+		auth.WithTransparency(transparency.New(*transparencyURL))
+		log.Info().Str("transparency", *transparencyURL).Msg("mandate-issuance sealing enabled")
+	}
 
 	mcpSrv := mcp.NewServer(log)
 	mcpSrv.Register("issue_mandate", auth.MCPTool())

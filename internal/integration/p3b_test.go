@@ -78,7 +78,7 @@ func TestP3B_MandateGreetEndToEnd(t *testing.T) {
 	visitorAns := domain.LocalANSName("visitor")
 
 	// Happy path: the initiator discovers the requirement, gets a mandate, greets.
-	reply, _, peer, err := greet.Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(),
+	reply, _, _, peer, err := greet.Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(),
 		visitorPriv, visitorAns, "greeter-mandate", "hello")
 	if err != nil {
 		t.Fatalf("mandate greet failed: %v", err)

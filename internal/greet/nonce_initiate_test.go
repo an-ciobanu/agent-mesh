@@ -52,7 +52,7 @@ func TestInitiateNonceHappyPath(t *testing.T) {
 	}
 
 	visitorPriv, _ := crypto.GenerateEd25519()
-	reply, _, peer, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(),
+	reply, _, _, peer, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(),
 		visitorPriv, domain.LocalANSName("visitor"), "greeter-nonce", "hello")
 	if err != nil {
 		t.Fatalf("nonce greet failed: %v", err)
@@ -78,7 +78,7 @@ func TestInitiateNonceNoGetNonce(t *testing.T) {
 	}
 
 	visitorPriv, _ := crypto.GenerateEd25519()
-	if _, _, _, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(),
+	if _, _, _, _, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(),
 		visitorPriv, domain.LocalANSName("visitor"), "greeter-nonce", "hi"); err == nil {
 		t.Fatal("expected error when the greeter has no get_nonce endpoint")
 	}

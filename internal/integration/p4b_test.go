@@ -52,7 +52,7 @@ func TestP4B_NonceGreetEndToEnd(t *testing.T) {
 	htu := greetEndpoint // card.URL resolves to this same host+/a2a
 
 	// Happy path: initiator discovers the requirement, gets a nonce, proves, greets.
-	reply, _, peer, err := greet.Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(),
+	reply, _, _, peer, err := greet.Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(),
 		visitorPriv, visitorAns, "greeter-nonce", "hello")
 	if err != nil {
 		t.Fatalf("nonce greet failed: %v", err)

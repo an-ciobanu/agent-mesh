@@ -78,7 +78,7 @@ func (s *Supervisor) Start(ctx context.Context) error {
 		if a.Policy != "authority" {
 			continue
 		}
-		if err := s.spawn(ctx, a.Name, nil, s.bin+"/authority", "--name", a.Name, "--addr", a.Addr, "--registry", regURL); err != nil {
+		if err := s.spawn(ctx, a.Name, nil, s.bin+"/authority", "--name", a.Name, "--addr", a.Addr, "--registry", regURL, "--transparency", tlURL); err != nil {
 			return err
 		}
 		if err := waitReady(ctx, a.BaseURL()+"/.well-known/agent-card.json", 5*time.Second); err != nil {
@@ -111,7 +111,7 @@ func (s *Supervisor) greeterArgs(a Agent) []string {
 		}
 		return []string{
 			"--name", a.Name, "--role", a.Role, "--addr", a.Addr,
-			"--registry", regURL, protoFlag, "--payment", payment,
+			"--registry", regURL, "--transparency", tlURL, protoFlag, "--payment", payment,
 			"--authority-role", "authority", "--authority-name", a.Authority,
 			"--events",
 		}

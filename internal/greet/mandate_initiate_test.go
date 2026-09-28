@@ -62,7 +62,7 @@ func TestInitiateMandateHappyPath(t *testing.T) {
 	}
 
 	visitorPriv, _ := crypto.GenerateEd25519()
-	reply, _, peer, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(),
+	reply, _, _, peer, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(),
 		visitorPriv, domain.LocalANSName("visitor"), "greeter-mandate", "hello")
 	if err != nil {
 		t.Fatalf("mandate greet failed: %v", err)
@@ -87,7 +87,7 @@ func TestInitiateNoAuthorityFound(t *testing.T) {
 	}
 
 	visitorPriv, _ := crypto.GenerateEd25519()
-	if _, _, _, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(),
+	if _, _, _, _, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(),
 		visitorPriv, domain.LocalANSName("visitor"), "greeter-mandate", "hi"); err == nil {
 		t.Fatal("expected error when no authority is registered")
 	}
@@ -120,7 +120,7 @@ func TestInitiateEmptyMandate(t *testing.T) {
 	}
 
 	visitorPriv, _ := crypto.GenerateEd25519()
-	if _, _, _, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(),
+	if _, _, _, _, err := Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(),
 		visitorPriv, domain.LocalANSName("visitor"), "greeter-mandate", "hi"); err == nil {
 		t.Fatal("expected error for an empty mandate")
 	}

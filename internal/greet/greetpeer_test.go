@@ -48,7 +48,7 @@ func TestGreetPeerOpenEmitsInitiatorEvents(t *testing.T) {
 	var buf bytes.Buffer
 	ctx := events.WithScope(context.Background(), events.NewJSONEmitter(&buf), "g9", "chris", events.RoleInitiator)
 
-	reply, _, err := GreetPeer(ctx, resolver.New(), a2a.NewClient(), mcp.NewClient(), nil,
+	reply, _, _, err := GreetPeer(ctx, resolver.New(), a2a.NewClient(), mcp.NewClient(), nil,
 		priv, domain.LocalANSName("chris"), peer, "hello")
 	if err != nil {
 		t.Fatalf("GreetPeer: %v", err)

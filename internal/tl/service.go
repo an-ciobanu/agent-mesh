@@ -18,14 +18,21 @@ const maxStatementBytes = 1 << 20
 // Service is the transparency-log HTTP service. It signs receipts with its own
 // Ed25519 key.
 type Service struct {
-	log  *Log
-	priv ed25519.PrivateKey
-	l    zerolog.Logger
+	log   *Log
+	priv  ed25519.PrivateKey
+	logID string // this log's identity: the thumbprint of its public key
+	l     zerolog.Logger
 }
 
 // NewService returns a transparency service backed by a fresh empty log.
 func NewService(priv ed25519.PrivateKey, log zerolog.Logger) *Service {
-	return &Service{log: NewLog(), priv: priv, l: log.With().Str("component", "tl").Logger()}
+	pub := priv.Public().(ed25519.PublicKey)
+	return &Service{
+		log:   NewLog(),
+		priv:  priv,
+		logID: crypto.Thumbprint(crypto.PublicJWK(pub)),
+		l:     log.With().Str("component", "tl").Logger(),
+	}
 }
 
 // Handler returns the transparency-log routes.
@@ -38,6 +45,7 @@ func (s *Service) Handler() http.Handler {
 }
 
 type receiptClaims struct {
+	LogID      string `json:"logId"`
 	EntryIndex int    `json:"entryIndex"`
 	TreeSize   int    `json:"treeSize"`
 	Root       []byte `json:"root"`
@@ -64,7 +72,7 @@ func (s *Service) handleAppend(w http.ResponseWriter, r *http.Request) {
 
 	index, size, root, proof := s.log.AppendAndProve(statement)
 
-	claims, err := json.Marshal(receiptClaims{EntryIndex: index, TreeSize: size, Root: root})
+	claims, err := json.Marshal(receiptClaims{LogID: s.logID, EntryIndex: index, TreeSize: size, Root: root})
 	if err != nil {
 		s.l.Error().Err(err).Msg("append: marshal receipt claims")
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -77,10 +85,10 @@ func (s *Service) handleAppend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.l.Info().Int("entryIndex", index).Int("treeSize", size).Msg("statement sealed")
+	s.l.Info().Str("logId", s.logID).Int("entryIndex", index).Int("treeSize", size).Msg("statement sealed")
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(domain.Receipt{
-		EntryIndex: index, TreeSize: size, Root: root, Proof: proof, COSE: receiptCOSE,
+		LogID: s.logID, EntryIndex: index, TreeSize: size, Root: root, Proof: proof, COSE: receiptCOSE,
 	}); err != nil {
 		s.l.Error().Err(err).Msg("append: encode receipt")
 	}

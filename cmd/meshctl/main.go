@@ -65,7 +65,7 @@ func runGreet(args []string) {
 	callerAns := domain.LocalANSName(*from)
 	ctx := context.Background()
 
-	reply, evidence, peer, err := greet.Initiate(
+	reply, evidence, _, peer, err := greet.Initiate(
 		ctx,
 		discovery.New(*registryURL),
 		resolver.New(),

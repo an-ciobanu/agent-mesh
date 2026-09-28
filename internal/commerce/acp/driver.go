@@ -59,7 +59,7 @@ func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco 
 	events.Emit(ctx, "authority.resolve", events.StatusOK, map[string]string{"authority": auth.Name, "role": authorityRole})
 
 	events.Emit(ctx, "spend.request", events.StatusInfo, map[string]string{"authority": auth.Name, "tool": "issue_spend_mandate", "endpoint": auth.BaseURL + "/mcp"})
-	mandate, err := acquireSpendMandate(ctx, mcpCli, auth.BaseURL+"/mcp", callerAns, audienceAns, item)
+	mandate, mandateEv, err := acquireSpendMandate(ctx, mcpCli, auth.BaseURL+"/mcp", callerAns, audienceAns, item)
 	if err != nil {
 		events.Emit(ctx, "spend.acquire", events.StatusFail, map[string]string{"error": err.Error(), "authority": auth.Name})
 		return commerce.BuyResult{}, err
@@ -67,6 +67,10 @@ func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco 
 	events.Emit(ctx, "spend.acquire", events.StatusOK, map[string]string{
 		"authority": auth.Name, "item": item.ID, "maxAmount": strconv.FormatInt(item.Amount, 10), "currency": item.Currency, "tool": "issue_spend_mandate (MCP)",
 	})
+	var mandateEvidence []domain.EvidenceBundle
+	if mandateEv != nil {
+		mandateEvidence = append(mandateEvidence, *mandateEv)
+	}
 
 	sessionID, amount, err := createSession(ctx, httpc, greetID, peer.BaseURL+checkoutPath, item.ID)
 	if err != nil {
@@ -81,7 +85,10 @@ func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco 
 		return commerce.BuyResult{}, err
 	}
 	events.Emit(ctx, "receipt", events.StatusOK, map[string]string{"paymentRef": res.PaymentRef, "status": res.Status, "provider": res.Provider})
-	return commerce.BuyResult{PaymentRef: res.PaymentRef, Status: res.Status, ItemID: item.ID}, nil
+	return commerce.BuyResult{
+		PaymentRef: res.PaymentRef, Status: res.Status, ItemID: item.ID,
+		PurchaseEvidence: res.Evidence, MandateEvidence: mandateEvidence,
+	}, nil
 }
 
 func acpExtension(card a2a.Card) (a2a.Extension, bool) {
@@ -115,24 +122,25 @@ func pickAuthority(ctx context.Context, disco domain.Discovery, role, wantAns st
 	return domain.AgentInfo{}, false, nil
 }
 
-func acquireSpendMandate(ctx context.Context, mcpCli *mcp.Client, authURL, subjectAns, audienceAns string, item commerce.Item) ([]byte, error) {
+func acquireSpendMandate(ctx context.Context, mcpCli *mcp.Client, authURL, subjectAns, audienceAns string, item commerce.Item) ([]byte, *domain.EvidenceBundle, error) {
 	raw, err := mcpCli.Call(ctx, authURL, "issue_spend_mandate", map[string]any{
 		"subjectAns": subjectAns, "audienceAns": audienceAns,
 		"itemId": item.ID, "maxAmount": item.Amount, "currency": item.Currency,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("issue_spend_mandate: %w", err)
+		return nil, nil, fmt.Errorf("issue_spend_mandate: %w", err)
 	}
 	var out struct {
-		MandateCOSE []byte `json:"mandateCose"`
+		MandateCOSE []byte                 `json:"mandateCose"`
+		Evidence    *domain.EvidenceBundle `json:"evidence"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("parse issue_spend_mandate: %w", err)
+		return nil, nil, fmt.Errorf("parse issue_spend_mandate: %w", err)
 	}
 	if len(out.MandateCOSE) == 0 {
-		return nil, fmt.Errorf("authority returned an empty spend mandate")
+		return nil, nil, fmt.Errorf("authority returned an empty spend mandate")
 	}
-	return out.MandateCOSE, nil
+	return out.MandateCOSE, out.Evidence, nil
 }
 
 func fetchCatalog(ctx context.Context, httpc *http.Client, greetID, url string) ([]commerce.Item, error) {
@@ -182,9 +190,10 @@ func createSession(ctx context.Context, httpc *http.Client, greetID, url, itemID
 }
 
 type completeResult struct {
-	Provider   string `json:"provider"`
-	PaymentRef string `json:"paymentRef"`
-	Status     string `json:"status"`
+	Provider   string                 `json:"provider"`
+	PaymentRef string                 `json:"paymentRef"`
+	Status     string                 `json:"status"`
+	Evidence   *domain.EvidenceBundle `json:"evidence"`
 }
 
 func completeSession(ctx context.Context, httpc *http.Client, greetID, url, callerAns string, mandate []byte) (completeResult, error) {

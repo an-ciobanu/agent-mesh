@@ -11,13 +11,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
 
-	"github.com/an-ciobanu/agent-mesh/internal/audit"
+	"github.com/an-ciobanu/agent-mesh/internal/attest"
 	"github.com/an-ciobanu/agent-mesh/internal/commerce"
 	"github.com/an-ciobanu/agent-mesh/internal/commerce/acp"
 	"github.com/an-ciobanu/agent-mesh/internal/commerce/ucp"
@@ -86,7 +85,8 @@ func main() {
 		runACPSeller(ctx, acpSellerParams{
 			name: *name, role: *role, addr: *addr, baseURL: baseURL, selfAns: selfAns,
 			registryURL: *registryURL, currency: *acpCurrency, payment: *payment,
-			stripeKeyEnv: *stripeKeyEnv, authorityRole: *authorityRole, authorityName: *authorityName,
+			stripeKeyEnv: *stripeKeyEnv, transparencyURL: *transparencyURL,
+			authorityRole: *authorityRole, authorityName: *authorityName,
 			priv: priv, em: em, log: log, disco: disco,
 		})
 		return
@@ -96,7 +96,8 @@ func main() {
 		runUCPSeller(ctx, acpSellerParams{
 			name: *name, role: *role, addr: *addr, baseURL: baseURL, selfAns: selfAns,
 			registryURL: *registryURL, currency: *acpCurrency, payment: *payment,
-			stripeKeyEnv: *stripeKeyEnv, authorityRole: *authorityRole, authorityName: *authorityName,
+			stripeKeyEnv: *stripeKeyEnv, transparencyURL: *transparencyURL,
+			authorityRole: *authorityRole, authorityName: *authorityName,
 			priv: priv, em: em, log: log, disco: disco,
 		})
 		return
@@ -185,11 +186,14 @@ func main() {
 					return "", false, fmt.Errorf("no agent named %q in role %q", toName, toRole)
 				}
 			}
-			reply, evidence, err := greet.GreetPeer(gctx, res, a2aCli, mcpCli, disco, priv, selfAns, peer, text)
+			reply, evidence, mandateEv, err := greet.GreetPeer(gctx, res, a2aCli, mcpCli, disco, priv, selfAns, peer, text)
 			if err != nil {
 				return "", false, err
 			}
-			auditEvidence(gctx, *transparencyURL, evidence, log)
+			for i := range mandateEv {
+				_ = attest.Audit(gctx, *transparencyURL, "mandate", &mandateEv[i])
+			}
+			_ = attest.Audit(gctx, *transparencyURL, "greet", evidence)
 			return reply, true, nil
 		}
 		trig := a2a.NewTriggerService(*name, greetFn, log, em)
@@ -230,6 +234,10 @@ func main() {
 			if berr != nil {
 				return "", "", berr
 			}
+			for i := range result.MandateEvidence {
+				_ = attest.Audit(gctx, *transparencyURL, "mandate", &result.MandateEvidence[i])
+			}
+			_ = attest.Audit(gctx, *transparencyURL, "purchase", result.PurchaseEvidence)
 			return result.PaymentRef, result.Status, nil
 		}
 		trig.SetBuy(buyFn)
@@ -273,53 +281,14 @@ func main() {
 	log.Info().Msg("agent stopped")
 }
 
-// auditEvidence independently verifies the greeter's sealed evidence against the
-// transparency log and emits an `audit` event so the UI can show the TL capstone
-// (real inclusion proof), not just a claim. Best-effort: any failure emits a
-// fail-status audit event and returns.
-func auditEvidence(ctx context.Context, tlURL string, evidence *domain.EvidenceBundle, log zerolog.Logger) {
-	if evidence == nil {
-		events.Emit(ctx, "audit", events.StatusInfo, map[string]string{"note": "no evidence (greeter not sealing)"})
-		return
-	}
-	if tlURL == "" {
-		events.Emit(ctx, "audit", events.StatusInfo, map[string]string{
-			"entryIndex": strconv.Itoa(evidence.Receipt.EntryIndex),
-			"treeSize":   strconv.Itoa(evidence.Receipt.TreeSize),
-			"note":       "sealed; no --transparency to audit",
-		})
-		return
-	}
-	tlPub, err := transparency.New(tlURL).FetchPubKey(ctx)
-	if err != nil {
-		events.Emit(ctx, "audit", events.StatusFail, map[string]string{"error": "fetch TL pubkey: " + err.Error()})
-		return
-	}
-	auditorPriv, err := crypto.GenerateEd25519()
-	if err != nil {
-		events.Emit(ctx, "audit", events.StatusFail, map[string]string{"error": "gen auditor key: " + err.Error()})
-		return
-	}
-	verdict, _, err := audit.New(domain.LocalANSName("auditor"), auditorPriv, log).Verify(ctx, *evidence, tlPub)
-	if err != nil {
-		events.Emit(ctx, "audit", events.StatusFail, map[string]string{"error": err.Error()})
-		return
-	}
-	events.Emit(ctx, "audit", events.StatusOK, map[string]string{
-		"verdict":    verdict.Verdict,
-		"entryIndex": strconv.Itoa(evidence.Receipt.EntryIndex),
-		"treeSize":   strconv.Itoa(evidence.Receipt.TreeSize),
-	})
-}
-
 type acpSellerParams struct {
-	name, role, addr, baseURL, selfAns, registryURL string
-	currency, payment, stripeKeyEnv                 string
-	authorityRole, authorityName                    string
-	priv                                            ed25519.PrivateKey
-	em                                              events.Emitter
-	log                                             zerolog.Logger
-	disco                                           *discovery.Client
+	name, role, addr, baseURL, selfAns, registryURL  string
+	currency, payment, stripeKeyEnv, transparencyURL string
+	authorityRole, authorityName                     string
+	priv                                             ed25519.PrivateKey
+	em                                               events.Emitter
+	log                                              zerolog.Logger
+	disco                                            *discovery.Client
 }
 
 // runACPSeller runs the agent as an ACP seller: it resolves and pins the authority
@@ -346,9 +315,16 @@ func runACPSeller(ctx context.Context, p acpSellerParams) {
 		p.log.Fatal().Str("payment", p.payment).Msg("unknown --payment (want: stripe | fake)")
 	}
 
+	var tl domain.Transparency
+	if p.transparencyURL != "" {
+		tl = transparency.New(p.transparencyURL)
+		p.log.Info().Str("transparency", p.transparencyURL).Msg("ACP purchase sealing enabled")
+	}
+
 	seller := acp.NewSeller(acp.SellerConfig{
 		SelfAns: p.selfAns, AgentName: p.name, Currency: p.currency,
 		Catalog: commerce.DefaultCatalog(p.currency), Guard: guard, Payment: pay,
+		SignKey: p.priv, TL: tl,
 		Events: p.em, Log: p.log,
 	})
 
@@ -418,10 +394,16 @@ func runUCPSeller(ctx context.Context, p acpSellerParams) {
 		p.log.Fatal().Str("payment", p.payment).Msg("unknown --payment (want: stripe | fake)")
 	}
 
+	var tl domain.Transparency
+	if p.transparencyURL != "" {
+		tl = transparency.New(p.transparencyURL)
+		p.log.Info().Str("transparency", p.transparencyURL).Msg("UCP purchase sealing enabled")
+	}
+
 	seller := ucp.NewSeller(ucp.SellerConfig{
 		SelfAns: p.selfAns, AgentName: p.name, Currency: p.currency,
 		Catalog: commerce.DefaultCatalog(p.currency), Guard: guard, Payment: pay,
-		SignKey: p.priv, AuthorityRole: p.authorityRole, AuthorityAns: authorityAns,
+		SignKey: p.priv, TL: tl, AuthorityRole: p.authorityRole, AuthorityAns: authorityAns,
 		Events: p.em, Log: p.log,
 	})
 

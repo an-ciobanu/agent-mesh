@@ -44,6 +44,7 @@ type SellerConfig struct {
 	Guard         *policy.UCP
 	Payment       commerce.PaymentPrimitive
 	SignKey       ed25519.PrivateKey
+	TL            domain.Transparency // transparency log to seal into (optional; nil disables sealing)
 	AuthorityRole string
 	AuthorityAns  string
 	Events        events.Emitter
@@ -260,7 +261,22 @@ func (s *Seller) handleComplete(w http.ResponseWriter, r *http.Request) {
 	delete(s.toks, in.PaymentToken)
 	s.mu.Unlock()
 	s.log.Info().Str("checkout", id).Str("paymentRef", res.Ref).Msg("ucp purchase completed")
-	writeJSON(w, http.StatusOK, map[string]any{"status": "completed", "provider": res.Provider, "paymentRef": res.Ref, "itemId": sess.itemID, "amount": sess.amount, "currency": sess.currency})
+
+	resp := map[string]any{"status": "completed", "provider": res.Provider, "paymentRef": res.Ref, "itemId": sess.itemID, "amount": sess.amount, "currency": sess.currency}
+	if s.cfg.TL != nil && s.cfg.SignKey != nil {
+		ev, serr := commerce.SealPurchase(gctx, s.cfg.SignKey, s.cfg.TL, commerce.PurchaseRecord{
+			Protocol: "ucp", CheckoutID: id, BuyerAns: in.CallerAns, SellerAns: s.cfg.SelfAns,
+			ItemID: sess.itemID, Amount: sess.amount, Currency: sess.currency, PaymentRef: res.Ref,
+		})
+		if serr != nil {
+			events.Emit(gctx, "seal", events.StatusFail, map[string]string{"error": serr.Error()})
+			s.log.Warn().Err(serr).Str("checkout", id).Msg("seal purchase failed")
+		} else {
+			events.Emit(gctx, "seal", events.StatusOK, map[string]string{"logId": ev.Receipt.LogID, "entryIndex": strconv.Itoa(ev.Receipt.EntryIndex)})
+			resp["evidence"] = ev
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

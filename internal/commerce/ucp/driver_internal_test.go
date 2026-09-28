@@ -205,7 +205,7 @@ func TestPostJSONExpect(t *testing.T) {
 
 func TestAcquireMandate(t *testing.T) {
 	// Unreachable authority -> mcp.Client.Call fails -> wrapped error.
-	if _, err := acquireMandate(context.Background(), mcp.NewClient(), "http://127.0.0.1:0/mcp", "issue_checkout_mandate", map[string]any{}); err == nil {
+	if _, _, err := acquireMandate(context.Background(), mcp.NewClient(), "http://127.0.0.1:0/mcp", "issue_checkout_mandate", map[string]any{}); err == nil {
 		t.Fatal("expected error for unreachable authority")
 	}
 
@@ -215,7 +215,7 @@ func TestAcquireMandate(t *testing.T) {
 	})
 	httpSrv := httptest.NewServer(emptySrv.Handler())
 	defer httpSrv.Close()
-	if _, err := acquireMandate(context.Background(), mcp.NewClient(), httpSrv.URL, "issue_checkout_mandate", map[string]any{}); err == nil {
+	if _, _, err := acquireMandate(context.Background(), mcp.NewClient(), httpSrv.URL, "issue_checkout_mandate", map[string]any{}); err == nil {
 		t.Fatal("expected error for empty mandate from authority")
 	}
 }

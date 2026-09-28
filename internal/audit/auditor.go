@@ -27,6 +27,7 @@ func New(auditorAns string, priv ed25519.PrivateKey, log zerolog.Logger) *Audito
 }
 
 type receiptClaims struct {
+	LogID      string `json:"logId"`
 	EntryIndex int    `json:"entryIndex"`
 	TreeSize   int    `json:"treeSize"`
 	Root       []byte `json:"root"`
@@ -63,12 +64,21 @@ func (a *Auditor) Verify(_ context.Context, bundle domain.EvidenceBundle, tlPub 
 	}
 	v.Checks = append(v.Checks, "OK: receipt signed by the transparency log")
 
+	// 2b. The log id in the receipt must be the thumbprint of the log key we just
+	// verified against — this pins the receipt to a specific, named log identity
+	// (the "check the TL and log id from the peer's output" property).
+	wantLogID := crypto.Thumbprint(crypto.PublicJWK(tlPub))
+	if bundle.Receipt.LogID != wantLogID {
+		return fail("receipt log id does not match the transparency-log key")
+	}
+	v.Checks = append(v.Checks, "OK: log id "+wantLogID+" matches the log key")
+
 	// 3. Receipt COSE claims match the receipt fields.
 	var rc receiptClaims
 	if err := json.Unmarshal(claimsBytes, &rc); err != nil {
 		return fail("receipt claims unparseable: " + err.Error())
 	}
-	if rc.EntryIndex != bundle.Receipt.EntryIndex || rc.TreeSize != bundle.Receipt.TreeSize || !bytes.Equal(rc.Root, bundle.Receipt.Root) {
+	if rc.LogID != bundle.Receipt.LogID || rc.EntryIndex != bundle.Receipt.EntryIndex || rc.TreeSize != bundle.Receipt.TreeSize || !bytes.Equal(rc.Root, bundle.Receipt.Root) {
 		return fail("receipt claims do not match receipt fields")
 	}
 	v.Checks = append(v.Checks, "OK: receipt claims consistent")

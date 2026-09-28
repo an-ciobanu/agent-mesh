@@ -45,7 +45,7 @@ func TestP2B_GreetSealAudit(t *testing.T) {
 	}
 
 	priv, _ := crypto.GenerateEd25519()
-	_, evidence, _, err := greet.Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(), priv, domain.LocalANSName("visitor"), "greeter", "hello there")
+	_, evidence, _, _, err := greet.Initiate(ctx, disco, resolver.New(), a2a.NewClient(), mcp.NewClient(), priv, domain.LocalANSName("visitor"), "greeter", "hello there")
 	if err != nil {
 		t.Fatalf("greet: %v", err)
 	}
