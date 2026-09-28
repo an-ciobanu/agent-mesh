@@ -55,6 +55,7 @@ type ucpSession struct {
 	itemID     string
 	amount     int64
 	currency   string
+	shipped    bool
 }
 
 type tokenRec struct {
@@ -163,8 +164,9 @@ func (s *Seller) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	s.mu.Lock()
 	sess, ok := s.ses[id]
-	if ok {
+	if ok && !sess.shipped {
 		sess.amount += shippingFee
+		sess.shipped = true
 		s.ses[id] = sess
 	}
 	s.mu.Unlock()
