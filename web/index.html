@@ -12,6 +12,7 @@
     --token:  #4aa3ff;   /* token/mandate = blue   */
     --authority: #8b93a7;/* authority     = gray   */
     --acp: #a774ff;      /* acp seller    = purple */
+    --ucp: #3fb950;      /* ucp seller    = green  */
     --ok: #3fb950; --bad: #f85149; --wire: #56607a;
   }
   * { box-sizing: border-box; }
@@ -171,11 +172,11 @@
 <script>
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 const logEl = document.getElementById('log'), countEl = document.getElementById('count');
-const COL = { simple:'#f4523b', nonce:'#f2c94c', token:'#4aa3ff', authority:'#8b93a7', acp:'#a774ff' };
-const LABEL = { simple:'simple', nonce:'nonce', token:'token', authority:'authority', acp:'acp seller' };
+const COL = { simple:'#f4523b', nonce:'#f2c94c', token:'#4aa3ff', authority:'#8b93a7', acp:'#a774ff', ucp:'#3fb950' };
+const LABEL = { simple:'simple', nonce:'nonce', token:'token', authority:'authority', acp:'acp seller', ucp:'ucp seller' };
 // Interactions carry the greeter's POLICY (open|mandate|nonce); COL/LABEL are
 // keyed by UI TYPE (simple|token|nonce). Map policy -> UI type before lookup.
-const POLICY2TYPE = { open:'simple', mandate:'token', nonce:'nonce', authority:'authority', simple:'simple', token:'token', acp:'acp', seller:'acp' };
+const POLICY2TYPE = { open:'simple', mandate:'token', nonce:'nonce', authority:'authority', simple:'simple', token:'token', acp:'acp', ucp:'ucp', seller:'acp' };
 const uiType = t => POLICY2TYPE[t] || t || 'simple';
 let W, H, DPR;
 function resize(){ DPR = window.devicePixelRatio||1; W = cv.clientWidth; H = cv.clientHeight;
@@ -318,6 +319,16 @@ const STEP = {
   'charge':            {title:'charge · Stripe PaymentIntent',      explain:'seller settles a real test-mode charge for the item price',               kind:'msg'},
   'receipt':           {title:'receipt',                            explain:'payment succeeded — the transaction is complete',                         kind:'msg'},
   'purchase.rejected': {title:'purchase rejected',                  explain:'seller refused to charge — fail closed',                                  kind:'msg'},
+  'profile.read':        {title:'read UCP profile · /.well-known/ucp', explain:'buyer discovers the handler, endpoints, authority, and seller signing key', kind:'msg'},
+  'terms.verify':        {title:'verify signed terms',                 explain:'buyer checks the seller cryptographically signed these exact terms',       kind:'chk'},
+  'session.update':      {title:'update session · fulfillment',        explain:'seller adds shipping and re-signs the new total',                          kind:'msg'},
+  'checkout.acquire':    {title:'acquire CheckoutMandate · MCP',       explain:'authority signs an AP2 mandate over this cart state',                      kind:'msg'},
+  'payment.acquire':     {title:'acquire PaymentMandate · MCP',        explain:'authority signs an AP2 mandate authorizing the payment',                   kind:'msg'},
+  'tokenize':            {title:'tokenize · handler',                  explain:'buyer exchanges a credential for a scoped token bound to this checkout',   kind:'msg'},
+  'token.issue':         {title:'issue payment token',                 explain:'handler mints an opaque token with an allowance bound to the checkout',    kind:'chk'},
+  'token.verify':        {title:'verify payment token',                explain:'seller confirms the token is its own, bound, and covers the amount',       kind:'chk'},
+  'checkout.mandate.verify': {title:'verify CheckoutMandate',          explain:'seller checks the AP2 checkout mandate signature',                         kind:'chk'},
+  'payment.mandate.verify':  {title:'verify PaymentMandate',           explain:'seller checks the AP2 payment mandate signature',                          kind:'chk'},
 };
 
 function modelFromEvents(it){
@@ -326,8 +337,9 @@ function modelFromEvents(it){
     const actor = e.role === 'initiator' ? it.from : it.to;
     let peer = null;
     if (meta.kind === 'msg') {
-      if (e.step === 'mandate.acquire' || e.step === 'spend.acquire') peer = (e.detail && e.detail.authority) || 'authority';
+      if (e.step === 'mandate.acquire' || e.step === 'spend.acquire' || e.step === 'checkout.acquire' || e.step === 'payment.acquire') peer = (e.detail && e.detail.authority) || 'authority';
       else if (e.step === 'charge') peer = 'Stripe';
+      else if (e.step === 'tokenize') peer = 'handler';
       else peer = (actor === it.from) ? it.to : it.from;
     }
     return { actor, color: agentColor(actor), peer, title: meta.title, explain: meta.explain,

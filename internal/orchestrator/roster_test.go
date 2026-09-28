@@ -88,3 +88,19 @@ func TestDefaultRosterIncludesACPSeller(t *testing.T) {
 		t.Fatal("expected at least one ACP seller in the default roster")
 	}
 }
+
+func TestDefaultRosterIncludesUCPSeller(t *testing.T) {
+	r := DefaultRoster()
+	found := false
+	for _, a := range r.Agents {
+		if a.Type == "ucp" {
+			found = true
+			if a.Color != ColorUCP || a.Policy != "ucp" || a.Role != "seller" || a.Authority == "" {
+				t.Fatalf("bad ucp seller: %+v", a)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected a UCP seller in the default roster")
+	}
+}

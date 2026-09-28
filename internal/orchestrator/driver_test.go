@@ -71,3 +71,26 @@ func TestCollideRoutesSellerToBuy(t *testing.T) {
 		t.Fatalf("path = %q, want /trigger/buy", gotPath)
 	}
 }
+
+func TestCollideRoutesUCPSellerToBuy(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewEncoder(w).Encode(map[string]string{"greetId": "g1"})
+	}))
+	defer srv.Close()
+	addr := srv.Listener.Addr().String()
+
+	roster := Roster{Agents: []Agent{
+		{Name: "Ada", Role: "greeter-open", Policy: "open", Type: "simple", Addr: addr},
+		{Name: "shop-ucp", Role: "seller", Policy: "ucp", Type: "ucp", Addr: "127.0.0.1:1"},
+	}}
+	book := NewAgentBook(roster, 19998)
+	d := NewDriver(book)
+	if _, err := d.Collide(context.Background(), "Ada", "shop-ucp"); err != nil {
+		t.Fatalf("collide: %v", err)
+	}
+	if gotPath != "/trigger/buy" {
+		t.Fatalf("path = %q, want /trigger/buy", gotPath)
+	}
+}

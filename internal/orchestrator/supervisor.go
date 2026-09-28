@@ -100,14 +100,18 @@ func (s *Supervisor) Start(ctx context.Context) error {
 func (s *Supervisor) greeterArgs(a Agent) []string {
 	regURL := "http://" + s.registry
 	tlURL := "http://" + s.transparency
-	if a.Policy == "acp" {
+	if a.Policy == "acp" || a.Policy == "ucp" {
 		payment := s.sellerPayment
 		if payment == "" {
 			payment = "stripe"
 		}
+		protoFlag := "--acp"
+		if a.Policy == "ucp" {
+			protoFlag = "--ucp"
+		}
 		return []string{
 			"--name", a.Name, "--role", a.Role, "--addr", a.Addr,
-			"--registry", regURL, "--acp", "--payment", payment,
+			"--registry", regURL, protoFlag, "--payment", payment,
 			"--authority-role", "authority", "--authority-name", a.Authority,
 			"--events",
 		}

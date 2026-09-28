@@ -35,10 +35,10 @@ func (d *Driver) Collide(ctx context.Context, from, to string) (string, error) {
 	if toAgent.Policy == "authority" {
 		return "", fmt.Errorf("the authority is not greetable")
 	}
-	if fromAgent.Policy == "authority" || fromAgent.Type == "acp" {
+	if fromAgent.Policy == "authority" || fromAgent.Type == "acp" || fromAgent.Type == "ucp" {
 		return "", fmt.Errorf("%q cannot initiate", from)
 	}
-	if toAgent.Type == "acp" {
+	if toAgent.Type == "acp" || toAgent.Type == "ucp" {
 		return d.post(ctx, fromAgent.BaseURL()+"/trigger/buy", map[string]string{"toName": toAgent.Name})
 	}
 	return d.post(ctx, fromAgent.BaseURL()+"/trigger/greet",
