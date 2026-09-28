@@ -1,47 +1,57 @@
 package orchestrator
 
 import (
-	"math/rand"
 	"strconv"
 	"sync"
 )
 
-// namePool is the set of human names dynamic agents draw from (base-roster names
-// excluded at runtime).
-var namePool = []string{
-	"Luna", "Milo", "Priya", "Theo", "Nina", "Omar", "Sofia", "Ravi",
-	"Bao", "Tess", "Jonas", "Iris", "Leo", "Mia", "Ada2", "Noah2",
+// poolSpec is one entry in the fixed dynamic-agent pool: a deterministic name,
+// greeter policy, and — for token (mandate) greeters — the authority it trusts.
+type poolSpec struct {
+	name      string
+	role      string
+	policy    string
+	authority string
 }
 
-// dynType is a weighted random greeter type for a new agent.
-func dynType() (role, policy string) {
-	switch n := rand.Intn(100); {
-	case n < 60:
-		return "greeter-open", "open"
-	case n < 85:
-		return "greeter-nonce", "nonce"
-	default:
-		return "greeter-mandate", "mandate"
-	}
+// dynamicPool is the fixed, ordered cast of 15 greeters the agents slider reveals.
+// It is deterministic: the same names, types, and reveal order every run (8 open /
+// 4 nonce / 3 token). Token greeters trust an authority present in the base roster.
+var dynamicPool = []poolSpec{
+	{"Luna", "greeter-open", "open", ""},
+	{"Milo", "greeter-nonce", "nonce", ""},
+	{"Priya", "greeter-mandate", "mandate", "authority-1"},
+	{"Theo", "greeter-open", "open", ""},
+	{"Nina", "greeter-open", "open", ""},
+	{"Omar", "greeter-nonce", "nonce", ""},
+	{"Sofia", "greeter-mandate", "mandate", "authority-2"},
+	{"Ravi", "greeter-open", "open", ""},
+	{"Bao", "greeter-open", "open", ""},
+	{"Tess", "greeter-nonce", "nonce", ""},
+	{"Jonas", "greeter-mandate", "mandate", "authority-1"},
+	{"Iris", "greeter-open", "open", ""},
+	{"Leo", "greeter-open", "open", ""},
+	{"Mia", "greeter-nonce", "nonce", ""},
+	{"Zara", "greeter-open", "open", ""},
 }
 
-// AgentBook is the mesh's live set of agents: the base roster plus any spawned at
-// runtime. It is safe for concurrent use and mints new random agents.
+// AgentBook is the mesh's live set of agents: the base roster plus any revealed at
+// runtime from the fixed dynamic pool. It is safe for concurrent use.
 type AgentBook struct {
 	mu        sync.Mutex
 	agents    []Agent
 	baseCount int
-	nextPort  int
+	pool      []Agent // the fixed cast of dynamic agents, ports pre-assigned
 	usedNames map[string]bool
 	usedAddrs map[string]bool
 }
 
-// NewAgentBook seeds a book from base; dynamic agents get ports from startPort up.
+// NewAgentBook seeds a book from base; the fixed dynamic pool gets consecutive
+// ports from startPort up.
 func NewAgentBook(base Roster, startPort int) *AgentBook {
 	b := &AgentBook{
 		agents:    append([]Agent(nil), base.Agents...),
 		baseCount: len(base.Agents),
-		nextPort:  startPort,
 		usedNames: map[string]bool{},
 		usedAddrs: map[string]bool{},
 	}
@@ -49,8 +59,22 @@ func NewAgentBook(base Roster, startPort int) *AgentBook {
 		b.usedNames[a.Name] = true
 		b.usedAddrs[a.Addr] = true
 	}
+	for i, s := range dynamicPool {
+		addr := "127.0.0.1:" + strconv.Itoa(startPort+i)
+		a := mkAgent(s.name, s.role, s.policy, addr)
+		if s.policy == "mandate" {
+			a.Authority = s.authority
+		}
+		b.pool = append(b.pool, a)
+	}
 	return b
 }
+
+// PoolMax returns the hard cap on dynamic agents (the fixed pool size).
+func (b *AgentBook) PoolMax() int { return len(b.pool) }
+
+// BaseCount returns the number of always-present base-roster agents.
+func (b *AgentBook) BaseCount() int { return b.baseCount }
 
 // List returns a snapshot of the current agents.
 func (b *AgentBook) List() []Agent {
@@ -71,40 +95,19 @@ func (b *AgentBook) ByName(name string) (Agent, bool) {
 	return Agent{}, false
 }
 
-// NextAgent mints (but does not add) a new random dynamic agent: a unique name, a
-// free port, a weighted-random type, and — for a mandate greeter — a random
-// existing authority to trust. Returns false if no name is available.
+// NextAgent returns (but does not add) the next unrevealed agent from the fixed
+// dynamic pool, in reveal order. Returns false once all pool agents are revealed —
+// this is the hard cap on the number of dynamic agents.
 func (b *AgentBook) NextAgent() (Agent, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	name := ""
-	for _, n := range namePool {
-		if !b.usedNames[n] {
-			name = n
-			break
+	for _, a := range b.pool {
+		if !b.usedNames[a.Name] {
+			return a, true
 		}
 	}
-	if name == "" {
-		return Agent{}, false
-	}
-	for b.usedAddrs["127.0.0.1:"+strconv.Itoa(b.nextPort)] {
-		b.nextPort++
-	}
-	addr := "127.0.0.1:" + strconv.Itoa(b.nextPort)
-	b.nextPort++
-
-	role, policy := dynType()
-	a := mkAgent(name, role, policy, addr)
-	if policy == "mandate" {
-		auths := b.authoritiesLocked()
-		if len(auths) == 0 {
-			a = mkAgent(name, "greeter-open", "open", addr)
-		} else {
-			a.Authority = auths[rand.Intn(len(auths))]
-		}
-	}
-	return a, true
+	return Agent{}, false
 }
 
 // Add appends a minted agent and marks its name/addr used.
@@ -129,14 +132,4 @@ func (b *AgentBook) RemoveLast() (Agent, bool) {
 	delete(b.usedNames, last.Name)
 	delete(b.usedAddrs, last.Addr)
 	return last, true
-}
-
-func (b *AgentBook) authoritiesLocked() []string {
-	var out []string
-	for _, a := range b.agents {
-		if a.Policy == "authority" {
-			out = append(out, a.Name)
-		}
-	}
-	return out
 }

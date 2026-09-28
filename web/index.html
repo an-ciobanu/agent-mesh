@@ -138,8 +138,8 @@
     </div>
     <div class="ctrl">
       <label for="agentRange">agents</label>
-      <input id="agentRange" type="range" min="0" max="8" step="1" value="0">
-      <output id="agentOut">0</output>
+      <input id="agentRange" type="range" min="10" max="25" step="1" value="15">
+      <output id="agentOut">15</output>
     </div>
     <button id="pauseBtn" type="button">⏸ Pause</button>
   </div>
@@ -186,7 +186,13 @@ new ResizeObserver(resize).observe(cv); resize();
 // Circles are the real launched agents. The roster (and therefore the count) is a
 // launch-time property of the mesh; the browser just draws what the server reports.
 let agents = [];
+let BASE_COUNT = 0, POOL_MAX = 15;                     // fixed dynamic-pool bounds (from /config)
 async function loadAgents(){
+  try {
+    const cfg = await (await fetch('/config')).json(); // {baseCount, poolMax}
+    if (Number.isInteger(cfg.baseCount)) BASE_COUNT = cfg.baseCount;
+    if (Number.isInteger(cfg.poolMax))   POOL_MAX   = cfg.poolMax;
+  } catch (_) { /* keep defaults */ }
   const res = await fetch('/agents');
   const roster = await res.json(); // [{name, role, policy, type, color}]
   agents = roster.map(a => ({
@@ -486,6 +492,20 @@ const agentRange = document.getElementById('agentRange'), agentOut = document.ge
 let extra = 0;             // how many dynamic agents currently live
 let reconciling = false;
 
+// syncAgentSlider aligns the slider with the server's truth. The slider tracks the
+// TOTAL number of live agents: its floor is the always-present base roster and its
+// ceiling is base + the fixed dynamic pool. The tally shows that total (base agents
+// included), and `extra` tracks how many dynamic agents are currently revealed.
+// Called on boot so the initial reveal and page reloads match what the orchestrator
+// already has running.
+function syncAgentSlider(){
+  extra = Math.max(0, agents.length - BASE_COUNT);
+  agentRange.min = BASE_COUNT;
+  agentRange.max = BASE_COUNT + POOL_MAX;
+  agentRange.value = BASE_COUNT + extra;   // slider position = total live agents
+  agentOut.textContent = agents.length;    // tally = total live agents (base + dynamic)
+}
+
 function addCircle(a){
   // Mirrors loadAgents(): same fields (name,type,color,policy,r,x,y,vx,vy,flash),
   // same radius rule, same random spawn position and speed/angle velocity.
@@ -502,23 +522,30 @@ async function reconcileAgents(){
   if (reconciling) return;
   reconciling = true; agentRange.disabled = true;
   try {
-    while (extra < +agentRange.value){
+    // Slider value is the TOTAL target; the dynamic (spawnable) part is target - base.
+    const targetExtra = Math.max(0, +agentRange.value - BASE_COUNT);
+    while (extra < targetExtra){
       const res = await fetch('/spawn', {method:'POST'});
-      if (!res.ok) { agentRange.value = extra; break; }
-      const a = await res.json(); addCircle(a); extra++; agentOut.textContent = extra;
+      if (!res.ok) break;
+      const a = await res.json(); addCircle(a); extra++;
     }
-    while (extra > +agentRange.value){
+    while (extra > targetExtra){
       const res = await fetch('/despawn', {method:'POST'});
-      if (!res.ok) { agentRange.value = extra; break; }
-      const out = await res.json(); removeCircleByName(out.removed); extra--; agentOut.textContent = extra;
+      if (!res.ok) break;
+      const out = await res.json(); removeCircleByName(out.removed); extra--;
     }
-  } finally { reconciling = false; agentRange.disabled = false; }
+  } finally {
+    agentRange.value = BASE_COUNT + extra;      // reflect what actually happened
+    agentOut.textContent = BASE_COUNT + extra;  // tally = total live agents
+    reconciling = false; agentRange.disabled = false;
+  }
 }
 agentRange.addEventListener('change', reconcileAgents); // fires on release, not each drag tick
 
 // --- boot: load the real roster, subscribe to the event stream, then animate ---
 (async function boot(){
   await loadAgents();
+  syncAgentSlider();
   startEvents();
   requestAnimationFrame(step);
 })();

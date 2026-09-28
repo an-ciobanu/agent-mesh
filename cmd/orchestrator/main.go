@@ -54,8 +54,28 @@ func main() {
 	}
 	defer sup.Stop()
 
+	// Reveal an initial handful of the fixed dynamic pool so the mesh opens with a
+	// few extra greeters already running and registered.
+	const initialExtra = 5
+	for i := 0; i < initialExtra; i++ {
+		a, ok := book.NextAgent()
+		if !ok {
+			break
+		}
+		if err := sup.SpawnOne(a); err != nil {
+			log.Warn().Err(err).Str("agent", a.Name).Msg("initial spawn failed")
+			break
+		}
+		book.Add(a)
+		log.Info().Str("agent", a.Name).Str("policy", a.Policy).Msg("spawned initial dynamic agent")
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("GET /", http.FileServer(http.Dir(*webDir)))
+	mux.HandleFunc("GET /config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]int{"baseCount": book.BaseCount(), "poolMax": book.PoolMax()})
+	})
 	mux.HandleFunc("GET /agents", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(book.List())

@@ -1,6 +1,9 @@
 package orchestrator
 
-import "testing"
+import (
+	"strconv"
+	"testing"
+)
 
 func TestBookStartsFromBaseRoster(t *testing.T) {
 	b := NewAgentBook(DefaultRoster(), 18300)
@@ -51,6 +54,44 @@ func TestBookNeverRemovesBaseRoster(t *testing.T) {
 	b := NewAgentBook(DefaultRoster(), 18300)
 	if _, ok := b.RemoveLast(); ok {
 		t.Fatal("RemoveLast must refuse to remove a base-roster agent")
+	}
+}
+
+func TestBookPoolIsDeterministicAndCapped(t *testing.T) {
+	b := NewAgentBook(DefaultRoster(), 18300)
+	if got := b.PoolMax(); got != len(dynamicPool) || got != 15 {
+		t.Fatalf("PoolMax = %d, want 15", got)
+	}
+	if got := b.BaseCount(); got != len(DefaultRoster().Agents) {
+		t.Fatalf("BaseCount = %d, want %d", got, len(DefaultRoster().Agents))
+	}
+
+	// Reveal the whole pool; names/ports must be the fixed cast in order.
+	for i, spec := range dynamicPool {
+		a, ok := b.NextAgent()
+		if !ok {
+			t.Fatalf("pool exhausted early at %d", i)
+		}
+		if a.Name != spec.name {
+			t.Fatalf("reveal %d: name = %q, want %q (order must be deterministic)", i, a.Name, spec.name)
+		}
+		if want := "127.0.0.1:" + strconv.Itoa(18300+i); a.Addr != want {
+			t.Fatalf("reveal %d: addr = %q, want %q", i, a.Addr, want)
+		}
+		if spec.policy == "mandate" && a.Authority != spec.authority {
+			t.Fatalf("reveal %d: authority = %q, want %q", i, a.Authority, spec.authority)
+		}
+		b.Add(a)
+	}
+	// Hard cap: nothing beyond the fixed pool.
+	if _, ok := b.NextAgent(); ok {
+		t.Fatal("NextAgent must return false once the fixed pool is exhausted (hard cap)")
+	}
+
+	// Deterministic across runs: a fresh book reveals the same first agent.
+	b2 := NewAgentBook(DefaultRoster(), 18300)
+	if a, _ := b2.NextAgent(); a.Name != dynamicPool[0].name {
+		t.Fatalf("first reveal = %q, want %q (cast must be identical every run)", a.Name, dynamicPool[0].name)
 	}
 }
 
