@@ -20,6 +20,7 @@ import (
 	"github.com/an-ciobanu/agent-mesh/internal/audit"
 	"github.com/an-ciobanu/agent-mesh/internal/commerce"
 	"github.com/an-ciobanu/agent-mesh/internal/commerce/acp"
+	"github.com/an-ciobanu/agent-mesh/internal/commerce/ucp"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/a2a"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/authclient"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/discovery"
@@ -50,6 +51,7 @@ func main() {
 	emitEvents := flag.Bool("events", false, "emit per-step greet events as JSON lines to stdout")
 	allowTrigger := flag.Bool("allow-trigger", false, "expose POST /trigger/greet so a driver can make this agent initiate greets (demo only)")
 	acpSeller := flag.Bool("acp", false, "run as an ACP seller (serves /acp/* instead of a greet policy)")
+	ucpSeller := flag.Bool("ucp", false, "run as a UCP seller (serves /.well-known/ucp + /ucp/* instead of a greet policy)")
 	acpCurrency := flag.String("acp-currency", "usd", "ACP catalog currency (when --acp)")
 	payment := flag.String("payment", "stripe", "ACP funding backend: stripe | fake (when --acp)")
 	stripeKeyEnv := flag.String("stripe-key-env", "STRIPE_SECRET_KEY", "env var holding the Stripe test secret key (when --acp --payment=stripe)")
@@ -82,6 +84,16 @@ func main() {
 
 	if *acpSeller {
 		runACPSeller(ctx, acpSellerParams{
+			name: *name, role: *role, addr: *addr, baseURL: baseURL, selfAns: selfAns,
+			registryURL: *registryURL, currency: *acpCurrency, payment: *payment,
+			stripeKeyEnv: *stripeKeyEnv, authorityRole: *authorityRole, authorityName: *authorityName,
+			priv: priv, em: em, log: log, disco: disco,
+		})
+		return
+	}
+
+	if *ucpSeller {
+		runUCPSeller(ctx, acpSellerParams{
 			name: *name, role: *role, addr: *addr, baseURL: baseURL, selfAns: selfAns,
 			registryURL: *registryURL, currency: *acpCurrency, payment: *payment,
 			stripeKeyEnv: *stripeKeyEnv, authorityRole: *authorityRole, authorityName: *authorityName,
@@ -205,7 +217,16 @@ func main() {
 			if cerr != nil {
 				return "", "", fmt.Errorf("read seller card: %w", cerr)
 			}
-			result, berr := acp.BuyPeer(gctx, http.DefaultClient, mcpCli, disco, selfAns, peer, card)
+			var result commerce.BuyResult
+			var berr error
+			switch {
+			case hasExt(card, a2a.ExtACPURI):
+				result, berr = acp.BuyPeer(gctx, http.DefaultClient, mcpCli, disco, selfAns, peer, card)
+			case hasExt(card, a2a.ExtUCPURI):
+				result, berr = ucp.BuyPeer(gctx, http.DefaultClient, mcpCli, disco, selfAns, peer, card)
+			default:
+				return "", "", fmt.Errorf("seller %q advertises no known commerce protocol", toName)
+			}
 			if berr != nil {
 				return "", "", berr
 			}
@@ -371,6 +392,89 @@ func runACPSeller(ctx context.Context, p acpSellerParams) {
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
 	p.log.Info().Msg("acp seller stopped")
+}
+
+// runUCPSeller runs the agent as a UCP seller: resolves+pins the authority, builds
+// a UCP guard and a payment backend, uses its own identity key to sign checkout
+// terms, serves the UCP endpoints, and registers as its role.
+func runUCPSeller(ctx context.Context, p acpSellerParams) {
+	authPeer, authPub := resolveAuthority(ctx, p.disco, authclient.New(), p.authorityRole, p.authorityName, p.log)
+	authorityAns := domain.LocalANSName(authPeer.Name)
+	guard := policy.NewUCP(p.selfAns, authorityAns, authPub, p.log)
+
+	var pay commerce.PaymentPrimitive
+	switch p.payment {
+	case "fake":
+		pay = commerce.FakePayment{}
+		p.log.Info().Msg("UCP payment backend: fake (no network)")
+	case "stripe":
+		key := os.Getenv(p.stripeKeyEnv)
+		if key == "" {
+			p.log.Fatal().Str("env", p.stripeKeyEnv).Msg("UCP seller: Stripe secret key missing (fail closed)")
+		}
+		pay = commerce.StripePaymentIntent{Client: stripe.NewClient(key)}
+		p.log.Info().Msg("UCP payment backend: stripe (test mode)")
+	default:
+		p.log.Fatal().Str("payment", p.payment).Msg("unknown --payment (want: stripe | fake)")
+	}
+
+	seller := ucp.NewSeller(ucp.SellerConfig{
+		SelfAns: p.selfAns, AgentName: p.name, Currency: p.currency,
+		Catalog: commerce.DefaultCatalog(p.currency), Guard: guard, Payment: pay,
+		SignKey: p.priv, AuthorityRole: p.authorityRole, AuthorityAns: authorityAns,
+		Events: p.em, Log: p.log,
+	})
+
+	card := a2a.Card{
+		Name: p.name, Version: "0.1.0", Security: []map[string][]string{},
+		Capabilities: &a2a.Capabilities{Extensions: []a2a.Extension{{
+			URI:         a2a.ExtUCPURI,
+			Description: "buy over the Universal Commerce Protocol; see /.well-known/ucp",
+			Required:    true,
+			Params:      map[string]any{"profilePath": "/.well-known/ucp", "authorityRole": p.authorityRole, "authorityAns": authorityAns, "currency": p.currency},
+		}}},
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/.well-known/agent-card.json", a2a.CardHandler(card, p.log))
+	seller.Mount(mux)
+
+	srv := &http.Server{Addr: p.addr, Handler: mux}
+	go func() {
+		p.log.Info().Str("addr", p.addr).Str("ans", p.selfAns).Msg("UCP seller listening")
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			p.log.Fatal().Err(err).Msg("ucp seller server exited")
+		}
+	}()
+
+	info := domain.AgentInfo{Name: p.name, Role: p.role, BaseURL: p.baseURL, CardURL: p.baseURL + "/.well-known/agent-card.json"}
+	for i := 0; i < 10; i++ {
+		if err := p.disco.Register(ctx, info); err == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(shutdownCtx)
+	p.log.Info().Msg("ucp seller stopped")
+}
+
+// hasExt reports whether card advertises the A2A capabilities extension uri.
+func hasExt(card a2a.Card, uri string) bool {
+	if card.Capabilities == nil {
+		return false
+	}
+	for _, e := range card.Capabilities.Extensions {
+		if e.URI == uri {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveAuthority discovers the authority of the given role — optionally the one
