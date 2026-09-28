@@ -8,18 +8,12 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/an-ciobanu/agent-mesh/internal/commerce"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/a2a"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/mcp"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
 	"github.com/an-ciobanu/agent-mesh/internal/events"
 )
-
-// BuyResult is what a completed purchase returns to the caller.
-type BuyResult struct {
-	PaymentRef string
-	Status     string
-	ItemID     string
-}
 
 // BuyPeer drives a full ACP purchase against an already-discovered seller peer
 // whose card advertises the ACP extension: fetch catalog, pick the cheapest item,
@@ -27,10 +21,10 @@ type BuyResult struct {
 // complete a checkout session. Nothing about the seller or authority is hardcoded;
 // everything is read from the card. Steps are emitted through ctx (no-op if no
 // scope). disco is used only to discover the authority.
-func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco domain.Discovery, callerAns string, peer domain.AgentInfo, card a2a.Card) (BuyResult, error) {
+func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco domain.Discovery, callerAns string, peer domain.AgentInfo, card a2a.Card) (commerce.BuyResult, error) {
 	ext, ok := acpExtension(card)
 	if !ok {
-		return BuyResult{}, fmt.Errorf("peer %q does not advertise ACP", peer.Name)
+		return commerce.BuyResult{}, fmt.Errorf("peer %q does not advertise ACP", peer.Name)
 	}
 	events.Emit(ctx, "requirement", events.StatusInfo, map[string]string{"type": "acp"})
 	events.Emit(ctx, "card.read", events.StatusOK, map[string]string{"peer": peer.Name, "url": card.URL})
@@ -43,12 +37,12 @@ func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco 
 
 	items, err := fetchCatalog(ctx, httpc, greetID, peer.BaseURL+catalogPath)
 	if err != nil {
-		return BuyResult{}, err
+		return commerce.BuyResult{}, err
 	}
 	events.Emit(ctx, "catalog.fetch", events.StatusOK, map[string]string{"items": strconv.Itoa(len(items))})
-	item, ok := LowestPriced(items)
+	item, ok := commerce.LowestPriced(items)
 	if !ok {
-		return BuyResult{}, fmt.Errorf("seller %q has an empty catalog", peer.Name)
+		return commerce.BuyResult{}, fmt.Errorf("seller %q has an empty catalog", peer.Name)
 	}
 	events.Emit(ctx, "item.select", events.StatusOK, map[string]string{
 		"item": item.ID, "amount": strconv.FormatInt(item.Amount, 10), "currency": item.Currency,
@@ -57,15 +51,15 @@ func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco 
 	audienceAns := domain.LocalANSName(peer.Name)
 	auth, ok, err := pickAuthority(ctx, disco, authorityRole, authorityAns)
 	if err != nil {
-		return BuyResult{}, err
+		return commerce.BuyResult{}, err
 	}
 	if !ok {
-		return BuyResult{}, fmt.Errorf("no authority %q under role %q", authorityAns, authorityRole)
+		return commerce.BuyResult{}, fmt.Errorf("no authority %q under role %q", authorityAns, authorityRole)
 	}
 	mandate, err := acquireSpendMandate(ctx, mcpCli, auth.BaseURL+"/mcp", callerAns, audienceAns, item)
 	if err != nil {
 		events.Emit(ctx, "spend.acquire", events.StatusFail, map[string]string{"error": err.Error(), "authority": auth.Name})
-		return BuyResult{}, err
+		return commerce.BuyResult{}, err
 	}
 	events.Emit(ctx, "spend.acquire", events.StatusOK, map[string]string{
 		"authority": auth.Name, "item": item.ID, "maxAmount": strconv.FormatInt(item.Amount, 10), "currency": item.Currency, "tool": "issue_spend_mandate (MCP)",
@@ -73,7 +67,7 @@ func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco 
 
 	sessionID, amount, err := createSession(ctx, httpc, greetID, peer.BaseURL+checkoutPath, item.ID)
 	if err != nil {
-		return BuyResult{}, err
+		return commerce.BuyResult{}, err
 	}
 	events.Emit(ctx, "checkout.create", events.StatusOK, map[string]string{"sessionId": sessionID, "amount": strconv.FormatInt(amount, 10)})
 
@@ -81,10 +75,10 @@ func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco 
 	res, err := completeSession(ctx, httpc, greetID, peer.BaseURL+checkoutPath+"/"+sessionID+"/complete", callerAns, mandate)
 	if err != nil {
 		events.Emit(ctx, "purchase.rejected", events.StatusFail, map[string]string{"error": err.Error()})
-		return BuyResult{}, err
+		return commerce.BuyResult{}, err
 	}
 	events.Emit(ctx, "receipt", events.StatusOK, map[string]string{"paymentRef": res.PaymentRef, "status": res.Status, "provider": res.Provider})
-	return BuyResult{PaymentRef: res.PaymentRef, Status: res.Status, ItemID: item.ID}, nil
+	return commerce.BuyResult{PaymentRef: res.PaymentRef, Status: res.Status, ItemID: item.ID}, nil
 }
 
 func acpExtension(card a2a.Card) (a2a.Extension, bool) {
@@ -118,7 +112,7 @@ func pickAuthority(ctx context.Context, disco domain.Discovery, role, wantAns st
 	return domain.AgentInfo{}, false, nil
 }
 
-func acquireSpendMandate(ctx context.Context, mcpCli *mcp.Client, authURL, subjectAns, audienceAns string, item Item) ([]byte, error) {
+func acquireSpendMandate(ctx context.Context, mcpCli *mcp.Client, authURL, subjectAns, audienceAns string, item commerce.Item) ([]byte, error) {
 	raw, err := mcpCli.Call(ctx, authURL, "issue_spend_mandate", map[string]any{
 		"subjectAns": subjectAns, "audienceAns": audienceAns,
 		"itemId": item.ID, "maxAmount": item.Amount, "currency": item.Currency,
@@ -138,7 +132,7 @@ func acquireSpendMandate(ctx context.Context, mcpCli *mcp.Client, authURL, subje
 	return out.MandateCOSE, nil
 }
 
-func fetchCatalog(ctx context.Context, httpc *http.Client, greetID, url string) ([]Item, error) {
+func fetchCatalog(ctx context.Context, httpc *http.Client, greetID, url string) ([]commerce.Item, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	setGreet(req, greetID)
 	resp, err := httpc.Do(req)
@@ -150,7 +144,7 @@ func fetchCatalog(ctx context.Context, httpc *http.Client, greetID, url string) 
 		return nil, fmt.Errorf("catalog: status %d", resp.StatusCode)
 	}
 	var out struct {
-		Items []Item `json:"items"`
+		Items []commerce.Item `json:"items"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("decode catalog: %w", err)
@@ -219,7 +213,7 @@ func completeSession(ctx context.Context, httpc *http.Client, greetID, url, call
 
 func setGreet(req *http.Request, greetID string) {
 	if greetID != "" {
-		req.Header.Set(HeaderGreetID, greetID)
+		req.Header.Set(commerce.HeaderGreetID, greetID)
 	}
 }
 

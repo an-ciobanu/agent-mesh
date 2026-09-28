@@ -10,6 +10,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/an-ciobanu/agent-mesh/internal/commerce"
 	"github.com/an-ciobanu/agent-mesh/internal/commerce/acp"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/a2a"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/mcp"
@@ -38,7 +39,7 @@ func TestBuyPeerHappyPath(t *testing.T) {
 	guard := policy.NewSpend(domain.LocalANSName("shop-acp"), authAns, authPriv.Public().(ed25519.PublicKey), zerolog.Nop())
 	seller := acp.NewSeller(acp.SellerConfig{
 		SelfAns: domain.LocalANSName("shop-acp"), AgentName: "shop-acp", Currency: "usd",
-		Catalog: acp.DefaultCatalog("usd"), Guard: guard, Payment: acp.FakePayment{}, Log: zerolog.Nop(),
+		Catalog: commerce.DefaultCatalog("usd"), Guard: guard, Payment: commerce.FakePayment{}, Log: zerolog.Nop(),
 	})
 	sMux := http.NewServeMux()
 	seller.Mount(sMux)

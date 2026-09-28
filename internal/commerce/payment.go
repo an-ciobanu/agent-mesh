@@ -1,4 +1,7 @@
-package acp
+// Package commerce holds the protocol-agnostic commerce primitives shared by the
+// ACP and UCP sellers/drivers: the payment seam, the catalog types, and small
+// shared constants. Protocol-specific logic lives in the acp/ and ucp/ subpackages.
+package commerce
 
 import (
 	"context"
@@ -38,7 +41,7 @@ func (s StripePaymentIntent) Charge(ctx context.Context, r ChargeRequest) (Charg
 	pi, err := s.Client.CreatePaymentIntent(ctx, stripe.PaymentIntentRequest{
 		Amount:         r.Amount,
 		Currency:       r.Currency,
-		Description:    "agent-mesh ACP purchase: " + r.ItemID,
+		Description:    "agent-mesh purchase: " + r.ItemID,
 		IdempotencyKey: r.IdempotencyKey,
 		Metadata:       map[string]string{"source": "agent-mesh", "item": r.ItemID, "buyer": r.BuyerAns},
 	})

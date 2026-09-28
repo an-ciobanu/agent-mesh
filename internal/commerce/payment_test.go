@@ -1,15 +1,15 @@
-package acp_test
+package commerce_test
 
 import (
 	"context"
 	"testing"
 
-	"github.com/an-ciobanu/agent-mesh/internal/commerce/acp"
+	"github.com/an-ciobanu/agent-mesh/internal/commerce"
 )
 
 func TestFakePaymentSucceeds(t *testing.T) {
-	var p acp.PaymentPrimitive = acp.FakePayment{}
-	res, err := p.Charge(context.Background(), acp.ChargeRequest{
+	var p commerce.PaymentPrimitive = commerce.FakePayment{}
+	res, err := p.Charge(context.Background(), commerce.ChargeRequest{
 		Amount: 1200, Currency: "usd", ItemID: "widget", BuyerAns: "ada", IdempotencyKey: "k1",
 	})
 	if err != nil {

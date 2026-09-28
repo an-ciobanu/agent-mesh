@@ -1,9 +1,6 @@
-// Package acp implements the demo's Agentic Commerce Protocol seller (server) and
-// buyer driver (client): catalog + checkout_sessions create/complete, gated by an
-// authority-issued spend-mandate and settled through a PaymentPrimitive seam.
-package acp
+package commerce
 
-// Item is one thing an ACP seller sells.
+// Item is one thing a seller sells.
 type Item struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`

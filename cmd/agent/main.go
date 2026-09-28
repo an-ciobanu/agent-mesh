@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/an-ciobanu/agent-mesh/internal/audit"
+	"github.com/an-ciobanu/agent-mesh/internal/commerce"
 	"github.com/an-ciobanu/agent-mesh/internal/commerce/acp"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/a2a"
 	"github.com/an-ciobanu/agent-mesh/internal/comms/authclient"
@@ -308,17 +309,17 @@ func runACPSeller(ctx context.Context, p acpSellerParams) {
 	authorityAns := domain.LocalANSName(authPeer.Name)
 	guard := policy.NewSpend(p.selfAns, authorityAns, authPub, p.log)
 
-	var pay acp.PaymentPrimitive
+	var pay commerce.PaymentPrimitive
 	switch p.payment {
 	case "fake":
-		pay = acp.FakePayment{}
+		pay = commerce.FakePayment{}
 		p.log.Info().Msg("ACP payment backend: fake (no network)")
 	case "stripe":
 		key := os.Getenv(p.stripeKeyEnv)
 		if key == "" {
 			p.log.Fatal().Str("env", p.stripeKeyEnv).Msg("ACP seller: Stripe secret key missing (fail closed)")
 		}
-		pay = acp.StripePaymentIntent{Client: stripe.NewClient(key)}
+		pay = commerce.StripePaymentIntent{Client: stripe.NewClient(key)}
 		p.log.Info().Msg("ACP payment backend: stripe (test mode)")
 	default:
 		p.log.Fatal().Str("payment", p.payment).Msg("unknown --payment (want: stripe | fake)")
@@ -326,7 +327,7 @@ func runACPSeller(ctx context.Context, p acpSellerParams) {
 
 	seller := acp.NewSeller(acp.SellerConfig{
 		SelfAns: p.selfAns, AgentName: p.name, Currency: p.currency,
-		Catalog: acp.DefaultCatalog(p.currency), Guard: guard, Payment: pay,
+		Catalog: commerce.DefaultCatalog(p.currency), Guard: guard, Payment: pay,
 		Events: p.em, Log: p.log,
 	})
 

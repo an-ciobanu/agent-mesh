@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/an-ciobanu/agent-mesh/internal/commerce"
 	"github.com/an-ciobanu/agent-mesh/internal/commerce/acp"
 	"github.com/an-ciobanu/agent-mesh/internal/crypto"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
@@ -31,9 +32,9 @@ func newSellerServer(t *testing.T) (*httptest.Server, ed25519.PrivateKey) {
 		SelfAns:   domain.LocalANSName("shop-acp"),
 		AgentName: "shop-acp",
 		Currency:  "usd",
-		Catalog:   acp.DefaultCatalog("usd"),
+		Catalog:   commerce.DefaultCatalog("usd"),
 		Guard:     guard,
-		Payment:   acp.FakePayment{},
+		Payment:   commerce.FakePayment{},
 		Events:    events.Nop{},
 		Log:       zerolog.Nop(),
 	})
@@ -65,7 +66,7 @@ func postJSON(t *testing.T, url string, body any) *http.Response {
 	b, _ := json.Marshal(body)
 	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(acp.HeaderGreetID, "greet-test")
+	req.Header.Set(commerce.HeaderGreetID, "greet-test")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("post %s: %v", url, err)
@@ -82,7 +83,7 @@ func TestSellerCatalog(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	var out struct {
-		Items []acp.Item `json:"items"`
+		Items []commerce.Item `json:"items"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)

@@ -1,13 +1,13 @@
-package acp_test
+package commerce_test
 
 import (
 	"testing"
 
-	"github.com/an-ciobanu/agent-mesh/internal/commerce/acp"
+	"github.com/an-ciobanu/agent-mesh/internal/commerce"
 )
 
 func TestDefaultCatalogIsPricedInCurrency(t *testing.T) {
-	items := acp.DefaultCatalog("usd")
+	items := commerce.DefaultCatalog("usd")
 	if len(items) < 2 {
 		t.Fatalf("want >=2 items, got %d", len(items))
 	}
@@ -24,12 +24,12 @@ func TestDefaultCatalogIsPricedInCurrency(t *testing.T) {
 }
 
 func TestLowestPricedPicksCheapest(t *testing.T) {
-	items := []acp.Item{{ID: "a", Amount: 900, Currency: "usd"}, {ID: "b", Amount: 300, Currency: "usd"}, {ID: "c", Amount: 500, Currency: "usd"}}
-	it, ok := acp.LowestPriced(items)
+	items := []commerce.Item{{ID: "a", Amount: 900, Currency: "usd"}, {ID: "b", Amount: 300, Currency: "usd"}, {ID: "c", Amount: 500, Currency: "usd"}}
+	it, ok := commerce.LowestPriced(items)
 	if !ok || it.ID != "b" {
 		t.Fatalf("want b, got %+v ok=%v", it, ok)
 	}
-	if _, ok := acp.LowestPriced(nil); ok {
+	if _, ok := commerce.LowestPriced(nil); ok {
 		t.Fatal("empty catalog should return ok=false")
 	}
 }

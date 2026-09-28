@@ -8,24 +8,20 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/an-ciobanu/agent-mesh/internal/commerce"
 	"github.com/an-ciobanu/agent-mesh/internal/domain"
 	"github.com/an-ciobanu/agent-mesh/internal/events"
 	"github.com/an-ciobanu/agent-mesh/internal/policy"
 )
-
-// HeaderGreetID correlates a buyer's ACP calls (catalog/create/complete) with the
-// seller's emitted events. It mirrors a2a.HeaderGreetID; duplicated here to avoid
-// importing the a2a package into the commerce layer.
-const HeaderGreetID = "X-ANS-Greet-Id"
 
 // SellerConfig configures an ACP seller service.
 type SellerConfig struct {
 	SelfAns   string
 	AgentName string
 	Currency  string
-	Catalog   []Item
+	Catalog   []commerce.Item
 	Guard     *policy.Spend
-	Payment   PaymentPrimitive
+	Payment   commerce.PaymentPrimitive
 	Events    events.Emitter
 	Log       zerolog.Logger
 }
@@ -65,7 +61,7 @@ func (s *Seller) handleCatalog(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Seller) handleCreate(w http.ResponseWriter, r *http.Request) {
-	gctx := events.WithScope(r.Context(), s.cfg.Events, r.Header.Get(HeaderGreetID), s.cfg.AgentName, events.RoleResponder)
+	gctx := events.WithScope(r.Context(), s.cfg.Events, r.Header.Get(commerce.HeaderGreetID), s.cfg.AgentName, events.RoleResponder)
 	var in struct {
 		ItemID string `json:"itemId"`
 	}
@@ -73,7 +69,7 @@ func (s *Seller) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
 		return
 	}
-	var item Item
+	var item commerce.Item
 	found := false
 	for _, it := range s.cfg.Catalog {
 		if it.ID == in.ItemID {
@@ -98,7 +94,7 @@ func (s *Seller) handleCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Seller) handleComplete(w http.ResponseWriter, r *http.Request) {
-	gctx := events.WithScope(r.Context(), s.cfg.Events, r.Header.Get(HeaderGreetID), s.cfg.AgentName, events.RoleResponder)
+	gctx := events.WithScope(r.Context(), s.cfg.Events, r.Header.Get(commerce.HeaderGreetID), s.cfg.AgentName, events.RoleResponder)
 	id := r.PathValue("id")
 	s.mu.Lock()
 	sess, ok := s.ses[id]
@@ -122,7 +118,7 @@ func (s *Seller) handleComplete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "purchase not authorized: " + err.Error()})
 		return
 	}
-	res, err := s.cfg.Payment.Charge(gctx, ChargeRequest{
+	res, err := s.cfg.Payment.Charge(gctx, commerce.ChargeRequest{
 		Amount: sess.amount, Currency: sess.currency, ItemID: sess.itemID,
 		BuyerAns: in.CallerAns, IdempotencyKey: id,
 	})
