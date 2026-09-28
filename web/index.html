@@ -296,6 +296,7 @@ const STEP = {
   'requirement':     {title:'requirement detected',             explain:'the card advertises what the caller must present',                       kind:'note'},
   'nonce.get':       {title:'fetch nonce · MCP get_nonce',      explain:'greeter issues a fresh, single-use challenge',                           kind:'msg'},
   'dpop.build':      {title:'build DPoP proof',                 explain:'caller signs a P-256/ES256 proof over the nonce, bound to this request', kind:'chk'},
+  'mandate.request': {title:'call authority · issue_mandate', explain:'caller calls the authority (MCP) to request a COSE greet-mandate',        kind:'msg'},
   'mandate.acquire': {title:'acquire mandate · MCP issue_mandate', explain:'caller obtains a COSE mandate from the discovered authority',          kind:'msg'},
   'greet.send':      {title:'send greet · POST /a2a',           explain:'identity-signed greet, with the required proof attached',                kind:'msg'},
   'jws.verify':      {title:'verify identity JWS',              explain:'greeter confirms the caller possesses its signing key',                  kind:'chk'},
@@ -311,6 +312,7 @@ const STEP = {
   'audience':        {title:'audience check',                   explain:'greet was not addressed to this greeter',                               kind:'chk'},
   'catalog.fetch':     {title:'fetch catalog · GET /acp/catalog',   explain:'buyer reads the seller\'s items and prices — discovered, not hardcoded',   kind:'msg'},
   'item.select':       {title:'select item',                        explain:'buyer picks the cheapest item to purchase',                               kind:'note'},
+  'spend.request':     {title:'call authority · issue_spend_mandate',  explain:'buyer calls the authority (MCP) to request a spend-mandate for THIS item and price', kind:'msg'},
   'spend.acquire':     {title:'acquire spend-mandate · MCP issue_spend_mandate', explain:'buyer obtains an authority-signed mandate for THIS item and price',    kind:'msg'},
   'checkout.create':   {title:'create checkout · POST /acp/checkout_sessions',   explain:'buyer opens a checkout session for the chosen item',                  kind:'msg'},
   'checkout.complete': {title:'complete checkout · POST …/complete', explain:'buyer submits the spend-mandate to pay',                                   kind:'msg'},
@@ -322,7 +324,10 @@ const STEP = {
   'profile.read':        {title:'read UCP profile · /.well-known/ucp', explain:'buyer discovers the handler, endpoints, authority, and seller signing key', kind:'msg'},
   'terms.verify':        {title:'verify signed terms',                 explain:'buyer checks the seller cryptographically signed these exact terms',       kind:'chk'},
   'session.update':      {title:'update session · fulfillment',        explain:'seller adds shipping and re-signs the new total',                          kind:'msg'},
+  'authority.resolve':   {title:'resolve authority',                   explain:'buyer discovers the authority named in the seller profile',                kind:'chk'},
+  'checkout.request':    {title:'call authority · issue_checkout_mandate', explain:'buyer calls the authority (MCP) to request an AP2 checkout mandate',    kind:'msg'},
   'checkout.acquire':    {title:'acquire CheckoutMandate · MCP',       explain:'authority signs an AP2 mandate over this cart state',                      kind:'msg'},
+  'payment.request':     {title:'call authority · issue_payment_mandate',  explain:'buyer calls the authority (MCP) to request an AP2 payment mandate',     kind:'msg'},
   'payment.acquire':     {title:'acquire PaymentMandate · MCP',        explain:'authority signs an AP2 mandate authorizing the payment',                   kind:'msg'},
   'tokenize':            {title:'tokenize · handler',                  explain:'buyer exchanges a credential for a scoped token bound to this checkout',   kind:'msg'},
   'token.issue':         {title:'issue payment token',                 explain:'handler mints an opaque token with an allowance bound to the checkout',    kind:'chk'},
@@ -337,7 +342,7 @@ function modelFromEvents(it){
     const actor = e.role === 'initiator' ? it.from : it.to;
     let peer = null;
     if (meta.kind === 'msg') {
-      if (e.step === 'mandate.acquire' || e.step === 'spend.acquire' || e.step === 'checkout.acquire' || e.step === 'payment.acquire') peer = (e.detail && e.detail.authority) || 'authority';
+      if (e.step === 'mandate.acquire' || e.step === 'mandate.request' || e.step === 'spend.acquire' || e.step === 'spend.request' || e.step === 'checkout.acquire' || e.step === 'payment.acquire' || e.step === 'checkout.request' || e.step === 'payment.request') peer = (e.detail && e.detail.authority) || 'authority';
       else if (e.step === 'charge') peer = 'Stripe';
       else if (e.step === 'tokenize') peer = 'handler';
       else peer = (actor === it.from) ? it.to : it.from;

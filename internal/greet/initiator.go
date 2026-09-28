@@ -171,6 +171,9 @@ func acquireMandate(ctx context.Context, disco domain.Discovery, mcpCli *mcp.Cli
 	}
 	authURL := authority.BaseURL + "/mcp"
 
+	events.Emit(ctx, "authority.resolve", events.StatusOK, map[string]string{"authority": authority.Name, "role": authorityRole})
+	events.Emit(ctx, "mandate.request", events.StatusInfo, map[string]string{"authority": authority.Name, "tool": "issue_mandate", "endpoint": authURL, "scope": scope})
+
 	raw, err := mcpCli.Call(ctx, authURL, "issue_mandate", map[string]string{
 		"subjectAns":  callerAns,
 		"audienceAns": audienceAns,

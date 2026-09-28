@@ -117,6 +117,9 @@ func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco 
 	if !ok {
 		return commerce.BuyResult{}, fmt.Errorf("no authority %q under role %q", prof.AP2.AuthorityAns, prof.AP2.AuthorityRole)
 	}
+	events.Emit(ctx, "authority.resolve", events.StatusOK, map[string]string{"authority": auth.Name, "role": prof.AP2.AuthorityRole})
+
+	events.Emit(ctx, "checkout.request", events.StatusInfo, map[string]string{"authority": auth.Name, "tool": "issue_checkout_mandate", "endpoint": auth.BaseURL + "/mcp"})
 	cm, err := acquireMandate(ctx, mcpCli, auth.BaseURL+"/mcp", "issue_checkout_mandate", map[string]any{
 		"subjectAns": callerAns, "audienceAns": audienceAns, "checkoutId": sess.CheckoutID, "itemId": item.ID, "amount": amount, "currency": currency,
 	})
@@ -125,6 +128,8 @@ func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco 
 		return commerce.BuyResult{}, err
 	}
 	events.Emit(ctx, "checkout.acquire", events.StatusOK, map[string]string{"authority": auth.Name, "tool": "issue_checkout_mandate (MCP)"})
+
+	events.Emit(ctx, "payment.request", events.StatusInfo, map[string]string{"authority": auth.Name, "tool": "issue_payment_mandate", "endpoint": auth.BaseURL + "/mcp"})
 	pm, err := acquireMandate(ctx, mcpCli, auth.BaseURL+"/mcp", "issue_payment_mandate", map[string]any{
 		"subjectAns": callerAns, "audienceAns": audienceAns, "amount": amount, "currency": currency,
 	})

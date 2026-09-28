@@ -56,6 +56,9 @@ func BuyPeer(ctx context.Context, httpc *http.Client, mcpCli *mcp.Client, disco 
 	if !ok {
 		return commerce.BuyResult{}, fmt.Errorf("no authority %q under role %q", authorityAns, authorityRole)
 	}
+	events.Emit(ctx, "authority.resolve", events.StatusOK, map[string]string{"authority": auth.Name, "role": authorityRole})
+
+	events.Emit(ctx, "spend.request", events.StatusInfo, map[string]string{"authority": auth.Name, "tool": "issue_spend_mandate", "endpoint": auth.BaseURL + "/mcp"})
 	mandate, err := acquireSpendMandate(ctx, mcpCli, auth.BaseURL+"/mcp", callerAns, audienceAns, item)
 	if err != nil {
 		events.Emit(ctx, "spend.acquire", events.StatusFail, map[string]string{"error": err.Error(), "authority": auth.Name})
