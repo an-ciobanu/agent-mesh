@@ -145,6 +145,107 @@ func (a *Authority) MCPTool() mcp.ToolFunc {
 	}
 }
 
+// IssueCheckoutMandate signs an AP2 CheckoutMandate authorizing subject to buy
+// itemID from audience in checkoutID for at most amount in currency.
+func (a *Authority) IssueCheckoutMandate(subjectAns, audienceAns, checkoutID, itemID string, amount int64, currency string) ([]byte, error) {
+	if subjectAns == "" || audienceAns == "" || checkoutID == "" || itemID == "" || currency == "" {
+		return nil, fmt.Errorf("subjectAns, audienceAns, checkoutID, itemID and currency are required")
+	}
+	if amount <= 0 {
+		return nil, fmt.Errorf("amount must be > 0")
+	}
+	now := time.Now().UTC()
+	claims := domain.CheckoutMandateClaims{
+		MandateID: "checkout-" + randHex(8), SubjectAns: subjectAns, AudienceAns: audienceAns,
+		CheckoutID: checkoutID, ItemID: itemID, Amount: amount, Currency: currency,
+		Scope: domain.ScopeCheckout, NotBefore: now.Format(time.RFC3339), NotAfter: now.Add(a.ttl).Format(time.RFC3339),
+		AuthorityAns: a.ans,
+	}
+	b, err := json.Marshal(claims)
+	if err != nil {
+		return nil, fmt.Errorf("marshal checkout claims: %w", err)
+	}
+	cose, err := crypto.SignCOSE1(a.priv, b)
+	if err != nil {
+		return nil, fmt.Errorf("sign checkout mandate: %w", err)
+	}
+	a.log.Info().Str("mandateId", claims.MandateID).Str("checkoutId", checkoutID).Str("itemId", itemID).Int64("amount", amount).Msg("checkout mandate issued")
+	return cose, nil
+}
+
+// IssuePaymentMandate signs an AP2 PaymentMandate authorizing subject to pay at
+// most amount in currency to audience.
+func (a *Authority) IssuePaymentMandate(subjectAns, audienceAns string, amount int64, currency string) ([]byte, error) {
+	if subjectAns == "" || audienceAns == "" || currency == "" {
+		return nil, fmt.Errorf("subjectAns, audienceAns and currency are required")
+	}
+	if amount <= 0 {
+		return nil, fmt.Errorf("amount must be > 0")
+	}
+	now := time.Now().UTC()
+	claims := domain.PaymentMandateClaims{
+		MandateID: "payment-" + randHex(8), SubjectAns: subjectAns, AudienceAns: audienceAns,
+		Amount: amount, Currency: currency, Scope: domain.ScopePayment,
+		NotBefore: now.Format(time.RFC3339), NotAfter: now.Add(a.ttl).Format(time.RFC3339), AuthorityAns: a.ans,
+	}
+	b, err := json.Marshal(claims)
+	if err != nil {
+		return nil, fmt.Errorf("marshal payment claims: %w", err)
+	}
+	cose, err := crypto.SignCOSE1(a.priv, b)
+	if err != nil {
+		return nil, fmt.Errorf("sign payment mandate: %w", err)
+	}
+	a.log.Info().Str("mandateId", claims.MandateID).Int64("amount", amount).Msg("payment mandate issued")
+	return cose, nil
+}
+
+type checkoutMandateArgs struct {
+	SubjectAns  string `json:"subjectAns"`
+	AudienceAns string `json:"audienceAns"`
+	CheckoutID  string `json:"checkoutId"`
+	ItemID      string `json:"itemId"`
+	Amount      int64  `json:"amount"`
+	Currency    string `json:"currency"`
+}
+
+type paymentMandateArgs struct {
+	SubjectAns  string `json:"subjectAns"`
+	AudienceAns string `json:"audienceAns"`
+	Amount      int64  `json:"amount"`
+	Currency    string `json:"currency"`
+}
+
+// CheckoutMandateMCPTool returns the issue_checkout_mandate MCP tool.
+func (a *Authority) CheckoutMandateMCPTool() mcp.ToolFunc {
+	return func(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
+		var in checkoutMandateArgs
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+		cose, err := a.IssueCheckoutMandate(in.SubjectAns, in.AudienceAns, in.CheckoutID, in.ItemID, in.Amount, in.Currency)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(issueResult{MandateCOSE: cose})
+	}
+}
+
+// PaymentMandateMCPTool returns the issue_payment_mandate MCP tool.
+func (a *Authority) PaymentMandateMCPTool() mcp.ToolFunc {
+	return func(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
+		var in paymentMandateArgs
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+		cose, err := a.IssuePaymentMandate(in.SubjectAns, in.AudienceAns, in.Amount, in.Currency)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(issueResult{MandateCOSE: cose})
+	}
+}
+
 func randHex(n int) string {
 	b := make([]byte, n)
 	// rand.Read never returns an error on supported platforms (it aborts the

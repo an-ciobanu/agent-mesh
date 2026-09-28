@@ -151,3 +151,47 @@ func TestSpendMCPToolRoundTrip(t *testing.T) {
 		t.Fatalf("empty mandate")
 	}
 }
+
+func TestIssueCheckoutAndPaymentMandates(t *testing.T) {
+	priv, _ := crypto.GenerateEd25519()
+	ans := domain.LocalANSName("authority-1")
+	a := authority.New(ans, priv, time.Hour, zerolog.Nop())
+
+	cm, err := a.IssueCheckoutMandate(domain.LocalANSName("Ada"), domain.LocalANSName("shop-ucp"), "cs_9", "mug", 1200, "usd")
+	if err != nil {
+		t.Fatalf("checkout mandate: %v", err)
+	}
+	cp, _, err := crypto.VerifyCOSE1(cm)
+	if err != nil {
+		t.Fatalf("verify checkout: %v", err)
+	}
+	var cc domain.CheckoutMandateClaims
+	_ = json.Unmarshal(cp, &cc)
+	if cc.Scope != domain.ScopeCheckout || cc.CheckoutID != "cs_9" || cc.ItemID != "mug" || cc.Amount != 1200 || cc.AuthorityAns != ans {
+		t.Fatalf("bad checkout claims: %+v", cc)
+	}
+
+	pm, err := a.IssuePaymentMandate(domain.LocalANSName("Ada"), domain.LocalANSName("shop-ucp"), 1200, "usd")
+	if err != nil {
+		t.Fatalf("payment mandate: %v", err)
+	}
+	pp, _, _ := crypto.VerifyCOSE1(pm)
+	var pc domain.PaymentMandateClaims
+	_ = json.Unmarshal(pp, &pc)
+	if pc.Scope != domain.ScopePayment || pc.Amount != 1200 || pc.AuthorityAns != ans {
+		t.Fatalf("bad payment claims: %+v", pc)
+	}
+}
+
+func TestUCPMandateMCPTools(t *testing.T) {
+	priv, _ := crypto.GenerateEd25519()
+	a := authority.New(domain.LocalANSName("authority-1"), priv, time.Hour, zerolog.Nop())
+	cArgs, _ := json.Marshal(map[string]any{"subjectAns": "s", "audienceAns": "a", "checkoutId": "cs_1", "itemId": "mug", "amount": 1200, "currency": "usd"})
+	if out, err := a.CheckoutMandateMCPTool()(context.Background(), cArgs); err != nil || len(out) == 0 {
+		t.Fatalf("checkout tool: %v", err)
+	}
+	pArgs, _ := json.Marshal(map[string]any{"subjectAns": "s", "audienceAns": "a", "amount": 1200, "currency": "usd"})
+	if out, err := a.PaymentMandateMCPTool()(context.Background(), pArgs); err != nil || len(out) == 0 {
+		t.Fatalf("payment tool: %v", err)
+	}
+}
