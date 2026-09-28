@@ -32,3 +32,55 @@ type PurchaseRequest struct {
 	Currency     string
 	SpendMandate []byte
 }
+
+// ScopeCheckout / ScopePayment are the two AP2 mandate scopes UCP uses: a
+// CheckoutMandate authorizes a specific cart/checkout state; a PaymentMandate
+// authorizes the payment for it.
+const (
+	ScopeCheckout = "checkout"
+	ScopePayment  = "payment"
+)
+
+// CheckoutMandateClaims is the JSON payload of a signed AP2 CheckoutMandate: the
+// user (SubjectAns) authorizes buying ItemID from AudienceAns in a specific
+// checkout (CheckoutID) for at most Amount in Currency, attested by AuthorityAns.
+type CheckoutMandateClaims struct {
+	MandateID    string `json:"mandateId"`
+	SubjectAns   string `json:"subjectAns"`
+	AudienceAns  string `json:"audienceAns"`
+	CheckoutID   string `json:"checkoutId"`
+	ItemID       string `json:"itemId"`
+	Amount       int64  `json:"amount"`
+	Currency     string `json:"currency"`
+	Scope        string `json:"scope"`
+	NotBefore    string `json:"notBefore"`
+	NotAfter     string `json:"notAfter"`
+	AuthorityAns string `json:"authorityAns"`
+}
+
+// PaymentMandateClaims is the JSON payload of a signed AP2 PaymentMandate: the
+// user authorizes paying at most Amount in Currency to AudienceAns.
+type PaymentMandateClaims struct {
+	MandateID    string `json:"mandateId"`
+	SubjectAns   string `json:"subjectAns"`
+	AudienceAns  string `json:"audienceAns"`
+	Amount       int64  `json:"amount"`
+	Currency     string `json:"currency"`
+	Scope        string `json:"scope"`
+	NotBefore    string `json:"notBefore"`
+	NotAfter     string `json:"notAfter"`
+	AuthorityAns string `json:"authorityAns"`
+}
+
+// UCPCompletion is the server-authoritative content the UCP guard verifies: the
+// caller, the session's checkout/item/amount/currency, and the two presented AP2
+// mandates (COSE_Sign1 over the claim types above).
+type UCPCompletion struct {
+	CallerAns       string
+	CheckoutID      string
+	ItemID          string
+	Amount          int64
+	Currency        string
+	CheckoutMandate []byte
+	PaymentMandate  []byte
+}
