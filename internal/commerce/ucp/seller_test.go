@@ -172,6 +172,227 @@ func TestUCPHappyPath(t *testing.T) {
 	}
 }
 
+func TestUCPUpdateIsIdempotent(t *testing.T) {
+	srv, _, sellerPub := newUCPSeller(t)
+	defer srv.Close()
+
+	resp := post(t, srv.URL+"/ucp/checkout_sessions", map[string]string{"itemId": "sticker"})
+	var sess struct {
+		CheckoutID string `json:"checkoutId"`
+		Amount     int64  `json:"amount"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&sess)
+	resp.Body.Close()
+
+	resp = post(t, srv.URL+"/ucp/checkout_sessions/"+sess.CheckoutID, map[string]any{})
+	var first struct {
+		Amount            int64  `json:"amount"`
+		CheckoutSignature []byte `json:"checkoutSignature"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&first)
+	resp.Body.Close()
+	if first.Amount != sess.Amount+300 {
+		t.Fatalf("first update: want base+shippingFee=%d, got %d", sess.Amount+300, first.Amount)
+	}
+
+	resp = post(t, srv.URL+"/ucp/checkout_sessions/"+sess.CheckoutID, map[string]any{})
+	var second struct {
+		Amount            int64  `json:"amount"`
+		CheckoutSignature []byte `json:"checkoutSignature"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&second)
+	resp.Body.Close()
+	if second.Amount != sess.Amount+300 {
+		t.Fatalf("second update: shipping applied twice? want %d, got %d", sess.Amount+300, second.Amount)
+	}
+
+	payload, signer, err := crypto.VerifyCOSE1(second.CheckoutSignature)
+	if err != nil || !signer.Equal(sellerPub) {
+		t.Fatalf("second update signature not from seller: %v", err)
+	}
+	var terms struct {
+		CheckoutID string `json:"checkoutId"`
+		Amount     int64  `json:"amount"`
+	}
+	_ = json.Unmarshal(payload, &terms)
+	if terms.CheckoutID != sess.CheckoutID || terms.Amount != second.Amount {
+		t.Fatalf("re-signed terms mismatch: %+v vs amount=%d", terms, second.Amount)
+	}
+}
+
+func TestUCPCreateRejectsUnknownItem(t *testing.T) {
+	srv, _, _ := newUCPSeller(t)
+	defer srv.Close()
+	resp := post(t, srv.URL+"/ucp/checkout_sessions", map[string]string{"itemId": "does-not-exist"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404 for unknown item, got %d", resp.StatusCode)
+	}
+}
+
+func postRawBody(t *testing.T, url string, body string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post %s: %v", url, err)
+	}
+	return resp
+}
+
+func TestUCPCreateRejectsMalformedBody(t *testing.T) {
+	srv, _, _ := newUCPSeller(t)
+	defer srv.Close()
+	resp := postRawBody(t, srv.URL+"/ucp/checkout_sessions", "{not-json")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for malformed create body, got %d", resp.StatusCode)
+	}
+}
+
+func TestUCPUpdateRejectsUnknownSession(t *testing.T) {
+	srv, _, _ := newUCPSeller(t)
+	defer srv.Close()
+	resp := post(t, srv.URL+"/ucp/checkout_sessions/cs_missing", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404 for unknown session on update, got %d", resp.StatusCode)
+	}
+}
+
+func TestUCPTokenizeRejectsMalformedBody(t *testing.T) {
+	srv, _, _ := newUCPSeller(t)
+	defer srv.Close()
+	resp := postRawBody(t, srv.URL+"/ucp/tokenize", "{not-json")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for malformed tokenize body, got %d", resp.StatusCode)
+	}
+}
+
+func TestUCPTokenizeRejectsMissingCheckoutID(t *testing.T) {
+	srv, _, _ := newUCPSeller(t)
+	defer srv.Close()
+	resp := post(t, srv.URL+"/ucp/tokenize", map[string]any{
+		"binding":    map[string]string{"checkoutId": ""},
+		"allowance":  map[string]any{"maxAmount": 500, "currency": "usd"},
+		"credential": map[string]string{"type": "card"},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for missing checkoutId, got %d", resp.StatusCode)
+	}
+}
+
+func TestUCPCompleteRejectsMalformedBody(t *testing.T) {
+	srv, _, _ := newUCPSeller(t)
+	defer srv.Close()
+	resp := post(t, srv.URL+"/ucp/checkout_sessions", map[string]string{"itemId": "sticker"})
+	var sess struct {
+		CheckoutID string `json:"checkoutId"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&sess)
+	resp.Body.Close()
+
+	resp = postRawBody(t, srv.URL+"/ucp/checkout_sessions/"+sess.CheckoutID+"/complete", "{not-json")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for malformed complete body, got %d", resp.StatusCode)
+	}
+}
+
+func TestUCPCompleteRejectsUnknownSession(t *testing.T) {
+	srv, authPriv, _ := newUCPSeller(t)
+	defer srv.Close()
+	now := time.Now().UTC()
+	cm := mint(t, authPriv, domain.CheckoutMandateClaims{MandateID: "c", SubjectAns: domain.LocalANSName("Ada"), AudienceAns: domain.LocalANSName("shop-ucp"), CheckoutID: "cs_missing", ItemID: "sticker", Amount: 500, Currency: "usd", Scope: domain.ScopeCheckout, NotBefore: now.Add(-time.Minute).Format(time.RFC3339), NotAfter: now.Add(time.Hour).Format(time.RFC3339), AuthorityAns: domain.LocalANSName("authority-1")})
+	pm := mint(t, authPriv, domain.PaymentMandateClaims{MandateID: "p", SubjectAns: domain.LocalANSName("Ada"), AudienceAns: domain.LocalANSName("shop-ucp"), Amount: 500, Currency: "usd", Scope: domain.ScopePayment, NotBefore: now.Add(-time.Minute).Format(time.RFC3339), NotAfter: now.Add(time.Hour).Format(time.RFC3339), AuthorityAns: domain.LocalANSName("authority-1")})
+	resp := post(t, srv.URL+"/ucp/checkout_sessions/cs_missing/complete", map[string]any{"callerAns": domain.LocalANSName("Ada"), "checkoutMandate": cm, "paymentMandate": pm, "paymentToken": "utok_nope"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404 for unknown session, got %d", resp.StatusCode)
+	}
+}
+
+func TestUCPCompleteRejectsTokenBoundToDifferentCheckout(t *testing.T) {
+	srv, authPriv, _ := newUCPSeller(t)
+	defer srv.Close()
+
+	// Session A: the one we complete against.
+	resp := post(t, srv.URL+"/ucp/checkout_sessions", map[string]string{"itemId": "sticker"})
+	var sessA struct {
+		CheckoutID string `json:"checkoutId"`
+		Amount     int64  `json:"amount"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&sessA)
+	resp.Body.Close()
+
+	// Session B: the checkout the token is actually bound to.
+	resp = post(t, srv.URL+"/ucp/checkout_sessions", map[string]string{"itemId": "mug"})
+	var sessB struct {
+		CheckoutID string `json:"checkoutId"`
+		Amount     int64  `json:"amount"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&sessB)
+	resp.Body.Close()
+
+	resp = post(t, srv.URL+"/ucp/tokenize", map[string]any{
+		"binding":    map[string]string{"checkoutId": sessB.CheckoutID},
+		"allowance":  map[string]any{"maxAmount": sessA.Amount, "currency": "usd"},
+		"credential": map[string]string{"type": "card"},
+	})
+	var tok struct {
+		Token string `json:"token"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&tok)
+	resp.Body.Close()
+
+	now := time.Now().UTC()
+	cm := mint(t, authPriv, domain.CheckoutMandateClaims{MandateID: "c", SubjectAns: domain.LocalANSName("Ada"), AudienceAns: domain.LocalANSName("shop-ucp"), CheckoutID: sessA.CheckoutID, ItemID: "sticker", Amount: sessA.Amount, Currency: "usd", Scope: domain.ScopeCheckout, NotBefore: now.Add(-time.Minute).Format(time.RFC3339), NotAfter: now.Add(time.Hour).Format(time.RFC3339), AuthorityAns: domain.LocalANSName("authority-1")})
+	pm := mint(t, authPriv, domain.PaymentMandateClaims{MandateID: "p", SubjectAns: domain.LocalANSName("Ada"), AudienceAns: domain.LocalANSName("shop-ucp"), Amount: sessA.Amount, Currency: "usd", Scope: domain.ScopePayment, NotBefore: now.Add(-time.Minute).Format(time.RFC3339), NotAfter: now.Add(time.Hour).Format(time.RFC3339), AuthorityAns: domain.LocalANSName("authority-1")})
+
+	resp = post(t, srv.URL+"/ucp/checkout_sessions/"+sessA.CheckoutID+"/complete", map[string]any{"callerAns": domain.LocalANSName("Ada"), "checkoutMandate": cm, "paymentMandate": pm, "paymentToken": tok.Token})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403 for token bound to a different checkout, got %d", resp.StatusCode)
+	}
+}
+
+func TestUCPCompleteRejectsInsufficientAllowanceToken(t *testing.T) {
+	srv, authPriv, _ := newUCPSeller(t)
+	defer srv.Close()
+
+	resp := post(t, srv.URL+"/ucp/checkout_sessions", map[string]string{"itemId": "hoodie"})
+	var sess struct {
+		CheckoutID string `json:"checkoutId"`
+		Amount     int64  `json:"amount"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&sess)
+	resp.Body.Close()
+
+	resp = post(t, srv.URL+"/ucp/tokenize", map[string]any{
+		"binding":    map[string]string{"checkoutId": sess.CheckoutID},
+		"allowance":  map[string]any{"maxAmount": sess.Amount - 1, "currency": "usd"},
+		"credential": map[string]string{"type": "card"},
+	})
+	var tok struct {
+		Token string `json:"token"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&tok)
+	resp.Body.Close()
+
+	now := time.Now().UTC()
+	cm := mint(t, authPriv, domain.CheckoutMandateClaims{MandateID: "c", SubjectAns: domain.LocalANSName("Ada"), AudienceAns: domain.LocalANSName("shop-ucp"), CheckoutID: sess.CheckoutID, ItemID: "hoodie", Amount: sess.Amount, Currency: "usd", Scope: domain.ScopeCheckout, NotBefore: now.Add(-time.Minute).Format(time.RFC3339), NotAfter: now.Add(time.Hour).Format(time.RFC3339), AuthorityAns: domain.LocalANSName("authority-1")})
+	pm := mint(t, authPriv, domain.PaymentMandateClaims{MandateID: "p", SubjectAns: domain.LocalANSName("Ada"), AudienceAns: domain.LocalANSName("shop-ucp"), Amount: sess.Amount, Currency: "usd", Scope: domain.ScopePayment, NotBefore: now.Add(-time.Minute).Format(time.RFC3339), NotAfter: now.Add(time.Hour).Format(time.RFC3339), AuthorityAns: domain.LocalANSName("authority-1")})
+
+	resp = post(t, srv.URL+"/ucp/checkout_sessions/"+sess.CheckoutID+"/complete", map[string]any{"callerAns": domain.LocalANSName("Ada"), "checkoutMandate": cm, "paymentMandate": pm, "paymentToken": tok.Token})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403 for insufficient-allowance token, got %d", resp.StatusCode)
+	}
+}
+
 func TestUCPCompleteRejectsBadMandate(t *testing.T) {
 	srv, authPriv, _ := newUCPSeller(t)
 	defer srv.Close()

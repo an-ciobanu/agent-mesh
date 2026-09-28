@@ -121,3 +121,68 @@ func TestSpendRejectsExpired(t *testing.T) {
 		t.Fatal("expected rejection: expired mandate")
 	}
 }
+
+func TestSpendRejectsNotYetValid(t *testing.T) {
+	g, authPriv := newGuard(t)
+	c := validClaims(time.Now().UTC())
+	c.NotBefore = time.Now().UTC().Add(10 * time.Minute).Format(time.RFC3339)
+	m := signSpend(t, authPriv, c)
+	if err := g.Verify(context.Background(), req(m)); err == nil {
+		t.Fatal("expected rejection: not-yet-valid mandate")
+	}
+}
+
+func TestSpendRejectsSubjectMismatch(t *testing.T) {
+	g, authPriv := newGuard(t)
+	c := validClaims(time.Now().UTC())
+	c.SubjectAns = domain.LocalANSName("someone-else")
+	m := signSpend(t, authPriv, c)
+	if err := g.Verify(context.Background(), req(m)); err == nil {
+		t.Fatal("expected rejection: subject mismatch")
+	}
+}
+
+func TestSpendRejectsWrongScope(t *testing.T) {
+	g, authPriv := newGuard(t)
+	c := validClaims(time.Now().UTC())
+	c.Scope = "greet"
+	m := signSpend(t, authPriv, c)
+	if err := g.Verify(context.Background(), req(m)); err == nil {
+		t.Fatal("expected rejection: wrong scope")
+	}
+}
+
+func TestSpendRejectsCurrencyMismatch(t *testing.T) {
+	g, authPriv := newGuard(t)
+	c := validClaims(time.Now().UTC())
+	c.Currency = "eur"
+	m := signSpend(t, authPriv, c)
+	if err := g.Verify(context.Background(), req(m)); err == nil {
+		t.Fatal("expected rejection: currency mismatch")
+	}
+}
+
+func TestSpendRejectsAuthorityClaimNotTrusted(t *testing.T) {
+	g, authPriv := newGuard(t)
+	c := validClaims(time.Now().UTC())
+	c.AuthorityAns = domain.LocalANSName("authority-2")
+	m := signSpend(t, authPriv, c)
+	if err := g.Verify(context.Background(), req(m)); err == nil {
+		t.Fatal("expected rejection: authority claim not trusted")
+	}
+}
+
+func TestSpendRejectsMalformedClaims(t *testing.T) {
+	g, authPriv := newGuard(t)
+	m := signSpend(t, authPriv, domain.SpendMandateClaims{}) // marshals fine, but exercises zero-value claim checks
+	if err := g.Verify(context.Background(), req(m)); err == nil {
+		t.Fatal("expected rejection: zero-value spend claims")
+	}
+}
+
+func TestSpendRejectsNotACOSEMessage(t *testing.T) {
+	g, _ := newGuard(t)
+	if err := g.Verify(context.Background(), req([]byte("not-a-cose-message"))); err == nil {
+		t.Fatal("expected rejection: not a valid COSE_Sign1")
+	}
+}

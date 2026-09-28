@@ -183,6 +183,138 @@ func TestIssueCheckoutAndPaymentMandates(t *testing.T) {
 	}
 }
 
+func TestIssueSpendMandateRejectsMissingFieldsAndAmount(t *testing.T) {
+	priv, _ := crypto.GenerateEd25519()
+	a := authority.New(domain.LocalANSName("authority-1"), priv, time.Hour, zerolog.Nop())
+	cases := []struct {
+		name        string
+		subjectAns  string
+		audienceAns string
+		itemID      string
+		maxAmount   int64
+		currency    string
+	}{
+		{"missing subject", "", "a", "widget", 100, "usd"},
+		{"missing audience", "s", "", "widget", 100, "usd"},
+		{"missing item", "s", "a", "", 100, "usd"},
+		{"missing currency", "s", "a", "widget", 100, ""},
+		{"zero amount", "s", "a", "widget", 0, "usd"},
+		{"negative amount", "s", "a", "widget", -5, "usd"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := a.IssueSpendMandate(c.subjectAns, c.audienceAns, c.itemID, c.maxAmount, c.currency); err == nil {
+				t.Fatalf("expected rejection for %s", c.name)
+			}
+		})
+	}
+}
+
+func TestIssueCheckoutMandateRejectsMissingFieldsAndAmount(t *testing.T) {
+	priv, _ := crypto.GenerateEd25519()
+	a := authority.New(domain.LocalANSName("authority-1"), priv, time.Hour, zerolog.Nop())
+	cases := []struct {
+		name        string
+		subjectAns  string
+		audienceAns string
+		checkoutID  string
+		itemID      string
+		amount      int64
+		currency    string
+	}{
+		{"missing subject", "", "a", "cs_1", "mug", 100, "usd"},
+		{"missing audience", "s", "", "cs_1", "mug", 100, "usd"},
+		{"missing checkoutId", "s", "a", "", "mug", 100, "usd"},
+		{"missing item", "s", "a", "cs_1", "", 100, "usd"},
+		{"missing currency", "s", "a", "cs_1", "mug", 100, ""},
+		{"zero amount", "s", "a", "cs_1", "mug", 0, "usd"},
+		{"negative amount", "s", "a", "cs_1", "mug", -5, "usd"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := a.IssueCheckoutMandate(c.subjectAns, c.audienceAns, c.checkoutID, c.itemID, c.amount, c.currency); err == nil {
+				t.Fatalf("expected rejection for %s", c.name)
+			}
+		})
+	}
+}
+
+func TestIssuePaymentMandateRejectsMissingFieldsAndAmount(t *testing.T) {
+	priv, _ := crypto.GenerateEd25519()
+	a := authority.New(domain.LocalANSName("authority-1"), priv, time.Hour, zerolog.Nop())
+	cases := []struct {
+		name        string
+		subjectAns  string
+		audienceAns string
+		amount      int64
+		currency    string
+	}{
+		{"missing subject", "", "a", 100, "usd"},
+		{"missing audience", "s", "", 100, "usd"},
+		{"missing currency", "s", "a", 100, ""},
+		{"zero amount", "s", "a", 0, "usd"},
+		{"negative amount", "s", "a", -5, "usd"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := a.IssuePaymentMandate(c.subjectAns, c.audienceAns, c.amount, c.currency); err == nil {
+				t.Fatalf("expected rejection for %s", c.name)
+			}
+		})
+	}
+}
+
+func TestSpendMCPToolRejectsMalformedArgs(t *testing.T) {
+	priv, _ := crypto.GenerateEd25519()
+	a := authority.New(domain.LocalANSName("authority-1"), priv, time.Hour, zerolog.Nop())
+	if _, err := a.SpendMCPTool()(context.Background(), json.RawMessage("{")); err == nil {
+		t.Fatal("expected error for malformed tool arguments")
+	}
+}
+
+func TestSpendMCPToolPropagatesIssuanceError(t *testing.T) {
+	priv, _ := crypto.GenerateEd25519()
+	a := authority.New(domain.LocalANSName("authority-1"), priv, time.Hour, zerolog.Nop())
+	args, _ := json.Marshal(map[string]any{"subjectAns": "", "audienceAns": "a", "itemId": "widget", "maxAmount": 100, "currency": "usd"})
+	if _, err := a.SpendMCPTool()(context.Background(), args); err == nil {
+		t.Fatal("expected issuance validation error to propagate through the tool")
+	}
+}
+
+func TestCheckoutMandateMCPToolRejectsMalformedArgs(t *testing.T) {
+	priv, _ := crypto.GenerateEd25519()
+	a := authority.New(domain.LocalANSName("authority-1"), priv, time.Hour, zerolog.Nop())
+	if _, err := a.CheckoutMandateMCPTool()(context.Background(), json.RawMessage("{")); err == nil {
+		t.Fatal("expected error for malformed tool arguments")
+	}
+}
+
+func TestCheckoutMandateMCPToolPropagatesIssuanceError(t *testing.T) {
+	priv, _ := crypto.GenerateEd25519()
+	a := authority.New(domain.LocalANSName("authority-1"), priv, time.Hour, zerolog.Nop())
+	args, _ := json.Marshal(map[string]any{"subjectAns": "", "audienceAns": "a", "checkoutId": "cs_1", "itemId": "mug", "amount": 100, "currency": "usd"})
+	if _, err := a.CheckoutMandateMCPTool()(context.Background(), args); err == nil {
+		t.Fatal("expected issuance validation error to propagate through the tool")
+	}
+}
+
+func TestPaymentMandateMCPToolRejectsMalformedArgs(t *testing.T) {
+	priv, _ := crypto.GenerateEd25519()
+	a := authority.New(domain.LocalANSName("authority-1"), priv, time.Hour, zerolog.Nop())
+	if _, err := a.PaymentMandateMCPTool()(context.Background(), json.RawMessage("{")); err == nil {
+		t.Fatal("expected error for malformed tool arguments")
+	}
+}
+
+func TestPaymentMandateMCPToolPropagatesIssuanceError(t *testing.T) {
+	priv, _ := crypto.GenerateEd25519()
+	a := authority.New(domain.LocalANSName("authority-1"), priv, time.Hour, zerolog.Nop())
+	args, _ := json.Marshal(map[string]any{"subjectAns": "", "audienceAns": "a", "amount": 100, "currency": "usd"})
+	if _, err := a.PaymentMandateMCPTool()(context.Background(), args); err == nil {
+		t.Fatal("expected issuance validation error to propagate through the tool")
+	}
+}
+
 func TestUCPMandateMCPTools(t *testing.T) {
 	priv, _ := crypto.GenerateEd25519()
 	a := authority.New(domain.LocalANSName("authority-1"), priv, time.Hour, zerolog.Nop())
