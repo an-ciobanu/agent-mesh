@@ -23,6 +23,11 @@ const ExtNonceURI = "https://agent-mesh.local/ext/nonce/v1"
 // spend-mandates, and the seller's currency.
 const ExtACPURI = "https://agent-mesh.local/ext/acp/v1"
 
+// ExtUCPURI identifies the agent-mesh "UCP seller" A2A capabilities extension. A
+// seller that advertises it sells over the Universal Commerce Protocol; its params
+// point at the /.well-known/ucp discovery profile.
+const ExtUCPURI = "https://agent-mesh.local/ext/ucp/v1"
+
 // Extension is an A2A capabilities extension: a URI naming the extension plus
 // optional parameters. The mandate-gated greeter uses one to tell callers they
 // must present a mandate and by which role to discover the issuing authority.
